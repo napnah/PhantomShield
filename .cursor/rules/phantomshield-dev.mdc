@@ -1,0 +1,44 @@
+---
+description: PhantomShield 项目开发约束与环境约定
+alwaysApply: true
+---
+
+# PhantomShield 开发约束
+
+## 环境
+
+- **Python**：conda `base`（3.10.20），不新建 venv；系统包用 `pip install --user`（base 目录可能无写权限）。
+- **CrypTen**：0.4.1；PyTorch 2.8 须 `from crypten_compat import patch_crypten_inprocess`（见 `scripts/crypten_compat.py`）。
+- **BERT 权重**：`./bert-base-uncased`（ModelScope 下载，`python scripts/download_models.py`）。
+- **Rust 扩展**：`mcu_rust` 需 `CONDA_PREFIX` + `maturin develop --release`；协议核心优先对齐 Python `mcu_core`。
+
+## 架构分层（勿混用）
+
+| 层 | 目录 | 用途 |
+|---|---|---|
+| MCU 协议 | `mcu_core/protocols/` | 三方 P0/P1/HP，Π_mul/exp/softmax/gelu |
+| Rust 批处理 | `mcu_rust/` | PyO3 高速路径，交叉验证用 |
+| 密文算子基线 | `transformer/mcu_*_crypten.py` | CrypTen 2PC，非线性待换 MCU |
+| 自研密文线性 | `transformer/mcu_linear.py` | 三方 MCU，非 CrypTen |
+| Dashboard | `dashboard/` | 演示：关键词规则 + 小矩阵 MCU；非端到端 BERT |
+| 语义分类实验 | `experiments/crypten_bert_classify.py` | BERT+SST-2 + CrypTen 分类头 |
+
+## 实现原则
+
+1. **数值对齐**：超越函数 `MOD=256.0`、正份额拆分、PRG 与 `prg_sync.py` 字节级一致。
+2. **最小改动**：Dashboard 规则分类与 BERT 语义路径分开；接 BERT 时扩展 API，不破坏关键词演示。
+3. **诚实标注**：演示若用规则/模拟数据，须在代码注释标明；论文/答辩口径与实现一致。
+4. **测试**：协议改动用 `python -m mcu_core.protocols.run_all_tests`；Rust 用 `cargo test` + `compare_with_python.py`。
+5. **不提交**：`bert-*-uncased/`、`checkpoints/`、`target/`、`.env` 等大文件/密钥。
+
+## 常用命令
+
+```powershell
+$env:PYTHONIOENCODING="utf-8"
+# Dashboard 后端
+cd dashboard\backend; python main.py
+# 关键词分类 API 自测
+curl -X POST http://127.0.0.1:8000/api/infer -H "Content-Type: application/json" -d "{\"text\":\"患者发烧咳嗽\",\"scenario\":\"medical\"}"
+# CrypTen+BERT 语义分类
+python experiments\crypten_bert_classify.py
+```

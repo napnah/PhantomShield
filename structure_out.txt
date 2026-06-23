@@ -1,0 +1,10 @@
+﻿Body children: {'p': 126, 'tbl': 35, 'sectPr': 1}
+Tables: 35
+First table rows: 1
+  | 核心问题：  如何让"持有数据的用户"与"持有模型的服务商"在双方数据互不泄露的前提下，共同完成一次 Transformer 推理？
+Code-like paragraphs: 66
+(271, '# 启动方式（三个独立终端）')
+(272, 'python party.py --role hp --port 9000             # 辅助方')
+(273, 'python party.py --role p0 --port 9001 --data query.txt    # 用户方')
+(274, 'python party.py --role p1 --port 9002 --model bert/       # 服务商')
+(276, '# 进程隔离保证：')

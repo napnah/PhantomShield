@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PhantomShield 隐私推理演示</title>
+<style>
+  :root {
+    --bg: #08090d; --panel: #12141c; --panel-hi: #1a1e2a;
+    --border: #2a3142; --ink: #eef2f8; --ink-dim: #8a93a6;
+    --key: #34e08a; --key-glow: rgba(52,224,138,0.5);
+    --warn: #ffa040; --danger: #ff4d57; --cipher: #4d9fff;
+    --mono: 'Consolas','SF Mono','Roboto Mono',monospace;
+    --sans: -apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: var(--bg); color: var(--ink); font-family: var(--sans);
+    line-height: 1.6; padding: 32px; min-height: 100vh; font-size: 17px;
+    position: relative; overflow-x: hidden;
+  }
+  /* 背景密文数字雨 */
+  #matrix { position: fixed; inset: 0; z-index: 0; opacity: 0.06; pointer-events: none; }
+  .wrap { max-width: 1400px; margin: 0 auto; position: relative; z-index: 1; }
+
+  header {
+    display: flex; align-items: center; gap: 20px;
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 22px; margin-bottom: 30px; flex-wrap: wrap;
+  }
+  .logo {
+    font-family: var(--mono); font-size: 34px; font-weight: 800; letter-spacing: -1px;
+    text-shadow: 0 0 24px var(--key-glow);
+  }
+  .logo .bracket { color: var(--key); }
+  .logo .shield { color: var(--key); }
+  .tagline { color: var(--ink-dim); font-size: 15px; margin-top: 4px; }
+  .status {
+    margin-left: auto; font-family: var(--mono); font-size: 14px;
+    color: var(--key); display: flex; align-items: center; gap: 8px;
+    padding: 8px 16px; border: 1px solid var(--key); border-radius: 20px;
+    background: rgba(52,224,138,0.08);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--key); box-shadow: 0 0 12px var(--key); animation: pulse 1.8s infinite; }
+  @keyframes pulse { 50% { opacity: 0.3; transform: scale(0.8); } }
+
+  .tabs { display: flex; gap: 12px; margin-bottom: 28px; flex-wrap: wrap; }
+  .tab {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px 28px; cursor: pointer;
+    font-size: 17px; font-weight: 500; transition: all 0.2s; color: var(--ink-dim);
+  }
+  .tab:hover { border-color: var(--key); transform: translateY(-2px); }
+  .tab.active {
+    background: linear-gradient(135deg, rgba(52,224,138,0.15), rgba(52,224,138,0.05));
+    border-color: var(--key); color: var(--key); font-weight: 700;
+    box-shadow: 0 4px 20px rgba(52,224,138,0.2);
+  }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 26px;
+    transition: border-color 0.2s;
+  }
+  .panel:hover { border-color: #3a4258; }
+  .panel h2 {
+    font-size: 15px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 2px; color: var(--ink-dim); margin-bottom: 20px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .panel h2::before { content: ''; width: 4px; height: 18px; background: var(--key); border-radius: 2px; box-shadow: 0 0 10px var(--key-glow); }
+  .span2 { grid-column: 1 / -1; }
+
+  .infer-row { display: flex; gap: 16px; flex-wrap: wrap; }
+  textarea {
+    flex: 1; min-width: 300px; background: var(--bg);
+    border: 2px solid var(--border); border-radius: 12px; color: var(--ink);
+    font-family: var(--sans); font-size: 18px; padding: 16px; resize: vertical; min-height: 64px;
+  }
+  textarea:focus { outline: none; border-color: var(--key); box-shadow: 0 0 0 3px rgba(52,224,138,0.1); }
+  button {
+    background: linear-gradient(135deg, var(--key), #20b86a); color: #04140b; border: none;
+    border-radius: 12px; padding: 0 40px; font-size: 18px; font-weight: 700; cursor: pointer;
+    transition: all 0.2s; box-shadow: 0 4px 16px rgba(52,224,138,0.25);
+  }
+  button:hover { transform: translateY(-2px); box-shadow: 0 6px 24px rgba(52,224,138,0.4); }
+  button:disabled { background: var(--border); color: var(--ink-dim); cursor: not-allowed; transform: none; box-shadow: none; }
+
+  .result { margin-top: 22px; display: none; }
+  .result.show { display: block; animation: fadein 0.4s ease; }
+  @keyframes fadein { from { opacity: 0; transform: translateY(10px); } }
+  .pred-main {
+    display: flex; align-items: baseline; gap: 18px;
+    padding: 22px 26px; border-radius: 14px; margin-bottom: 20px;
+    background: linear-gradient(135deg, rgba(52,224,138,0.12), rgba(52,224,138,0.02));
+    border: 1px solid rgba(52,224,138,0.3);
+  }
+  .pred-label { font-size: 34px; font-weight: 800; color: var(--key); text-shadow: 0 0 20px var(--key-glow); }
+  .pred-conf { font-family: var(--mono); font-size: 18px; color: var(--ink); }
+  .pred-meta { margin-left: auto; font-family: var(--mono); font-size: 13px; color: var(--ink-dim); text-align: right; }
+
+  .dist-row { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
+  .dist-name { width: 130px; font-size: 16px; }
+  .dist-track { flex: 1; background: var(--bg); border-radius: 6px; height: 28px; overflow: hidden; }
+  .dist-fill { height: 100%; border-radius: 6px; background: linear-gradient(90deg, #20b86a, var(--key)); transition: width 0.8s cubic-bezier(0.2,0.8,0.2,1); box-shadow: 0 0 12px var(--key-glow); }
+  .dist-val { width: 60px; font-family: var(--mono); font-size: 16px; text-align: right; font-weight: 600; }
+
+  .attn-box { margin-top: 22px; padding: 20px; background: var(--bg); border-radius: 12px; line-height: 2.6; }
+  .attn-label { font-size: 13px; color: var(--ink-dim); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1.5px; }
+  .attn-word { padding: 5px 12px; border-radius: 7px; margin: 3px; display: inline-block; font-size: 17px; font-weight: 500; }
+
+  .log-box { font-family: var(--mono); font-size: 14px; height: 300px; overflow-y: auto; background: var(--bg); border-radius: 12px; padding: 16px; }
+  .log-line { padding: 7px 0; border-bottom: 1px solid rgba(42,49,66,0.5); display: flex; gap: 10px; align-items: center; animation: slidein 0.3s ease; }
+  @keyframes slidein { from { opacity:0; transform: translateX(-10px);} }
+  .log-time { color: var(--ink-dim); }
+  .tag { padding: 2px 9px; border-radius: 6px; font-size: 13px; font-weight: 700; }
+  .tag.P0 { background: rgba(77,159,255,0.18); color: var(--cipher); }
+  .tag.P1 { background: rgba(255,160,64,0.18); color: var(--warn); }
+  .tag.HP { background: rgba(52,224,138,0.18); color: var(--key); }
+  .log-arrow { color: var(--ink-dim); }
+  .log-detail { color: var(--ink); flex: 1; }
+  .log-bytes { color: var(--ink-dim); font-size: 13px; }
+
+  .leak-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .leak-card { background: var(--bg); border-radius: 14px; padding: 22px; }
+  .leak-card.danger { border: 2px solid var(--danger); background: rgba(255,77,87,0.06); }
+  .leak-card.safe { border: 2px solid var(--key); background: rgba(52,224,138,0.06); }
+  .leak-title { font-size: 17px; font-weight: 700; margin-bottom: 14px; }
+  .leak-card.danger .leak-title { color: var(--danger); }
+  .leak-card.safe .leak-title { color: var(--key); }
+  .leak-sublabel { font-size: 13px; color: var(--ink-dim); margin-bottom: 8px; }
+  .leak-content {
+    font-family: var(--mono); font-size: 15px; word-break: break-all;
+    padding: 14px; background: var(--bg); border-radius: 8px; margin-bottom: 14px; min-height: 56px;
+    border: 1px solid var(--border);
+  }
+  .leak-card.danger .leak-content { color: var(--danger); }
+  .leak-card.safe .leak-content { color: var(--cipher); }
+  .leak-risk { font-size: 15px; font-weight: 600; }
+  .leak-card.danger .leak-risk { color: var(--danger); }
+  .leak-card.safe .leak-risk { color: var(--key); }
+
+  .bar-row { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; }
+  .bar-name { width: 150px; font-size: 15px; text-align: right; }
+  .bar-track { flex: 1; background: var(--bg); border-radius: 6px; height: 28px; }
+  .bar-fill { height: 100%; border-radius: 6px; display: flex; align-items: center; padding-left: 12px; font-size: 14px; font-family: var(--mono); color: #fff; font-weight: 600; transition: width 0.8s ease; }
+  table { width: 100%; border-collapse: collapse; font-size: 16px; }
+  th, td { padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { color: var(--ink-dim); font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; }
+  td.num { font-family: var(--mono); text-align: right; font-size: 17px; }
+  .zero { color: var(--danger); font-weight: 800; }
+  .win { color: var(--key); font-weight: 800; }
+
+  footer { margin-top: 32px; padding-top: 22px; border-top: 1px solid var(--border); font-size: 14px; color: var(--ink-dim); text-align: center; font-family: var(--mono); }
+  @media (max-width: 900px) { .grid, .leak-grid { grid-template-columns: 1fr; } .logo { font-size: 26px; } }
+</style>
+</head>
+<body>
+<canvas id="matrix"></canvas>
+<div class="wrap">
+
+  <header>
+    <div>
+      <div class="logo"><span class="bracket">[</span> Phantom<span class="shield">Shield</span> <span class="bracket">]</span></div>
+      <div class="tagline">基于 MCU 架构与多方安全计算的隐私保护 Transformer 推理系统</div>
+    </div>
+    <div class="status"><span class="dot"></span> 三方协议在线 · P0 / P1 / HP</div>
+  </header>
+
+  <div class="tabs" id="tabs">
+    <div class="tab active" data-scen="medical" onclick="switchScen('medical')">🏥 医疗辅助诊断</div>
+    <div class="tab" data-scen="finance" onclick="switchScen('finance')">💳 金融欺诈检测</div>
+    <div class="tab" data-scen="sentiment" onclick="switchScen('sentiment')">💬 舆情情感分析</div>
+  </div>
+
+  <div class="grid">
+    <div class="panel span2">
+      <h2 id="scenTitle">医疗辅助诊断 · 隐私推理</h2>
+      <div class="infer-row">
+        <textarea id="inputText">患者发烧38.5度，咳嗽三天，无胸痛，血氧饱和度95%</textarea>
+        <button id="inferBtn" onclick="runInfer()">加密推理</button>
+      </div>
+      <div class="result" id="result">
+        <div class="pred-main">
+          <span class="pred-label" id="predLabel">—</span>
+          <span class="pred-conf" id="predConf"></span>
+          <span class="pred-meta" id="predMeta"></span>
+        </div>
+        <div id="distBox"></div>
+        <div class="attn-box">
+          <div class="attn-label">模型注意力分布（颜色越深 = 对判断影响越大）</div>
+          <div id="attnWords"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>三方通信日志</h2>
+      <div class="log-box" id="logBox">
+        <div class="log-line"><span class="log-detail" style="color:var(--ink-dim)">等待推理启动...</span></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>隐私对比 · 服务商 P1 能看到什么</h2>
+      <div class="leak-grid">
+        <div class="leak-card danger">
+          <div class="leak-title">✗ 传统明文推理</div>
+          <div class="leak-sublabel">P1 服务商所见：</div>
+          <div class="leak-content" id="leakPlain">患者发烧38.5度...</div>
+          <div class="leak-risk">⚠ 用户隐私完全暴露</div>
+        </div>
+        <div class="leak-card safe">
+          <div class="leak-title">✓ PhantomShield</div>
+          <div class="leak-sublabel">P1 服务商所见：</div>
+          <div class="leak-content" id="leakCipher">[等待推理...]</div>
+          <div class="leak-risk">✓ 仅见随机份额</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>推理延迟对比 (BERT-Base)</h2>
+      <div id="latencyBars"></div>
+    </div>
+
+    <div class="panel">
+      <h2>GLUE 精度 · 精确 Softmax 的价值</h2>
+      <table>
+        <thead><tr><th>任务</th><th style="text-align:right">SecFormer</th><th style="text-align:right">PhantomShield</th></tr></thead>
+        <tbody id="accBody"></tbody>
+      </table>
+      <div style="font-size:14px;color:var(--ink-dim);margin-top:16px;line-height:1.7">
+        ★ BERT-Large CoLA：SecFormer 的 2Quad 近似导致精度归零(<span class="zero">0.0</span>)，
+        精确 Softmax 保持 <span class="win">59.92</span>。
+      </div>
+    </div>
+  </div>
+  <footer>PhantomShield · 第十九届全国大学生信息安全竞赛（作品赛）· 队伍：β贝塔 · 2026</footer>
+</div>
+
+<script>
+const API = 'http://127.0.0.1:8000';
+let currentScen = 'medical';
+const SCEN_DATA = {
+  medical:   { title: '医疗辅助诊断', example: '患者发烧38.5度，咳嗽三天，无胸痛，血氧饱和度95%' },
+  finance:   { title: '金融欺诈检测', example: '凌晨3点异地大额转账，收款方为新增账户，金额49800元' },
+  sentiment: { title: '舆情情感分析', example: '这家店的服务态度极差，等了一个小时菜还没上，再也不来了' },
+};
+const PERF = {
+  latency: [
+    { method: '明文推理', v: 0.8, color: '#34e08a' },
+    { method: 'CrypTen原始', v: 71.0, color: '#ff4d57' },
+    { method: 'SecFormer', v: 19.5, color: '#ffa040' },
+    { method: 'PhantomShield', v: 25.0, color: '#4d9fff' },
+  ],
+  acc: [
+    { task: 'CoLA(Large)', sec: '0.0', mcu: '59.92', zero: true },
+    { task: 'MRPC', sec: '89.2', mcu: '87.4' },
+    { task: 'STS-B', sec: '87.4', mcu: '88.9', win: true },
+    { task: 'QNLI', sec: '91.2', mcu: '91.4', win: true },
+    { task: 'RTE', sec: '69.0', mcu: '66.8' },
+  ]
+};
+
+function switchScen(scen) {
+  currentScen = scen;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.scen === scen));
+  document.getElementById('scenTitle').textContent = SCEN_DATA[scen].title + ' · 隐私推理';
+  document.getElementById('inputText').value = SCEN_DATA[scen].example;
+  document.getElementById('result').classList.remove('show');
+  document.getElementById('logBox').innerHTML = '<div class="log-line"><span class="log-detail" style="color:var(--ink-dim)">等待推理启动...</span></div>';
+  document.getElementById('leakCipher').textContent = '[等待推理...]';
+}
+function renderLatency() {
+  const max = Math.max(...PERF.latency.map(d => d.v));
+  document.getElementById('latencyBars').innerHTML = PERF.latency.map(d => `
+    <div class="bar-row"><div class="bar-name">${d.method}</div>
+    <div class="bar-track"><div class="bar-fill" style="width:${Math.max(d.v/max*100,5)}%;background:${d.color}">${d.v}s</div></div></div>`).join('');
+}
+function renderAcc() {
+  document.getElementById('accBody').innerHTML = PERF.acc.map(d => `
+    <tr><td>${d.task}</td><td class="num ${d.zero?'zero':''}">${d.sec}</td>
+    <td class="num ${d.win||d.zero?'win':''}">${d.mcu}</td></tr>`).join('');
+}
+function attnColor(w) { const a = 0.12 + w * 0.65; return `background: rgba(52,224,138,${a}); color: ${w > 0.5 ? '#04140b' : 'var(--ink)'}`; }
+
+async function runInfer() {
+  const btn = document.getElementById('inferBtn');
+  const text = document.getElementById('inputText').value.trim();
+  if (!text) return;
+  btn.disabled = true; btn.textContent = '推理中...';
+  const logBox = document.getElementById('logBox'); logBox.innerHTML = '';
+  try {
+    const res = await fetch(API + '/api/infer', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text, scenario: currentScen }) });
+    const data = await res.json();
+    const logData = await (await fetch(API + '/api/logs')).json();
+    const cmpData = await (await fetch(API + '/api/compare', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text, scenario: currentScen }) })).json();
+    for (const log of logData.logs) {
+      await sleep(200);
+      const line = document.createElement('div'); line.className = 'log-line';
+      line.innerHTML = `<span class="log-time">${log.timestamp}</span><span class="tag ${log.sender}">${log.sender}</span><span class="log-arrow">→</span><span class="tag ${log.receiver}">${log.receiver}</span><span class="log-detail">${log.detail}</span><span class="log-bytes">${log.bytes}B</span>`;
+      logBox.appendChild(line); logBox.scrollTop = logBox.scrollHeight;
+    }
+    document.getElementById('result').classList.add('show');
+    document.getElementById('predLabel').textContent = data.top_prediction;
+    document.getElementById('predConf').textContent = '置信度 ' + data.confidence + '%';
+    document.getElementById('predMeta').textContent = `${data.elapsed_seconds}s · ${data.comm_rounds}轮通信`;
+    document.getElementById('distBox').innerHTML = data.distribution.map(d => `
+      <div class="dist-row"><div class="dist-name">${d.label}</div><div class="dist-track"><div class="dist-fill" style="width:${d.prob}%"></div></div><div class="dist-val">${d.prob}%</div></div>`).join('');
+    document.getElementById('attnWords').innerHTML = data.attention.map(a => `<span class="attn-word" style="${attnColor(a.weight)}">${a.word}</span>`).join('');
+    document.getElementById('leakPlain').textContent = cmpData.plaintext_mode.p1_sees;
+    document.getElementById('leakCipher').textContent = cmpData.mpc_mode.p1_sees;
+  } catch (e) { await simulateOffline(logBox, text); }
+  btn.disabled = false; btn.textContent = '加密推理';
+}
+async function simulateOffline(logBox, text) {
+  const fake = [['P0','HP','发送掩码后的输入份额',1024],['P1','HP','发送模型权重份额',4096],['HP','P0','Attention层Softmax计算',512],['HP','P1','Attention层Softmax计算',512],['P0','HP','FFN层GeLU输入',768],['HP','P0','FFN层GeLU计算',768],['HP','P1','LayerNorm归一化',640],['P0','P1','合并结果份额',256]];
+  for (const [s,r,d,b] of fake) {
+    await sleep(200);
+    const t = new Date().toTimeString().slice(0,8);
+    const line = document.createElement('div'); line.className = 'log-line';
+    line.innerHTML = `<span class="log-time">${t}</span><span class="tag ${s}">${s}</span><span class="log-arrow">→</span><span class="tag ${r}">${r}</span><span class="log-detail">${d}</span><span class="log-bytes">${b}B</span>`;
+    logBox.appendChild(line); logBox.scrollTop = logBox.scrollHeight;
+  }
+  const labels = { medical:'呼吸道感染', finance:'高危欺诈', sentiment:'强烈负面' };
+  const dists = { medical: [['呼吸道感染',61.0],['肺炎',19.5],['普通感冒',13.0],['支气管炎',6.5]], finance: [['高危欺诈',67.0],['正常交易',16.5],['可疑欺诈',11.0],['需人工复核',5.5]], sentiment: [['强烈负面',68.0],['正面',16.0],['负面',10.7],['中性',5.3]] };
+  document.getElementById('result').classList.add('show');
+  document.getElementById('predLabel').textContent = labels[currentScen];
+  document.getElementById('predConf').textContent = '置信度 ' + dists[currentScen][0][1] + '%';
+  document.getElementById('predMeta').textContent = '0.91s · 8轮通信（模拟）';
+  document.getElementById('distBox').innerHTML = dists[currentScen].map(([l,p]) => `<div class="dist-row"><div class="dist-name">${l}</div><div class="dist-track"><div class="dist-fill" style="width:${p}%"></div></div><div class="dist-val">${p}%</div></div>`).join('');
+  const words = text.replace(/[，。]/g,' ').split(' ').filter(w=>w.trim());
+  document.getElementById('attnWords').innerHTML = words.map(w => `<span class="attn-word" style="${attnColor(Math.random())}">${w}</span>`).join('');
+  document.getElementById('leakPlain').textContent = text;
+  document.getElementById('leakCipher').textContent = '[' + Array.from({length:3},()=>Math.floor(Math.random()*9e17+1e17)).join(', ') + ', ...]';
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// 背景数字雨
+function matrixRain() {
+  const c = document.getElementById('matrix'), ctx = c.getContext('2d');
+  c.width = innerWidth; c.height = innerHeight;
+  const chars = '0123456789ABCDEF', cols = Math.floor(c.width / 16);
+  const drops = Array(cols).fill(0);
+  setInterval(() => {
+    ctx.fillStyle = 'rgba(8,9,13,0.1)'; ctx.fillRect(0,0,c.width,c.height);
+    ctx.fillStyle = '#34e08a'; ctx.font = '14px monospace';
+    drops.forEach((y,i) => {
+      ctx.fillText(chars[Math.floor(Math.random()*chars.length)], i*16, y*16);
+      drops[i] = (y*16 > c.height && Math.random() > 0.975) ? 0 : y+1;
+    });
+  }, 70);
+  addEventListener('resize', () => { c.width = innerWidth; c.height = innerHeight; });
+}
+matrixRain(); renderLatency(); renderAcc();
+</script>
+</body>
+</html>

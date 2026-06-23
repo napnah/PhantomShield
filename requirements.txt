@@ -1,0 +1,18 @@
+# PhantomShield / MCU-Transformer 依赖
+# 推荐：conda base (Python 3.10+) + pip install --user -r requirements.txt
+
+torch>=2.5.0
+transformers==4.46.0
+datasets==2.21.0
+pyarrow==17.0.0
+pycryptodome
+crypten==0.4.1
+fastapi>=0.100.0
+uvicorn>=0.20.0
+scikit-learn
+scipy
+modelscope
+numpy
+
+# Rust 扩展（可选，需 maturin develop）
+# 见 mcu_rust/pyproject.toml

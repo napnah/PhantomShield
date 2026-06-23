@@ -1,0 +1,31 @@
+[package]
+name = "mcu_rust"
+version = "0.1.0"
+edition = "2021"
+description = "Rust 高效实现的 mcu_core 协议核心（PyO3 绑定）"
+
+[lib]
+name = "mcu_rust"
+crate-type = ["cdylib", "rlib"]
+
+# 注意：`extension-module` 不在默认 features 中——它会让测试/基准可执行文件
+# 缺少 libpython 符号而链接失败。该 feature 仅由 maturin 构建时通过
+# `[tool.maturin] features` 注入（见 pyproject.toml）。`cargo test`/`cargo bench`
+# 则链接 libpython，可正常运行纯逻辑测试。
+[dependencies]
+pyo3 = { version = "0.22", features = ["abi3-py310"] }
+numpy = "0.22"
+aes = "0.8"
+rayon = "1"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "bench"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

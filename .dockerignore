@@ -1,0 +1,14 @@
+.git
+.cursor
+.pytest_cache
+target
+mcu_rust/target
+experiments/**/raw_runs
+experiments/docker_runs
+experiments/*_docker_real_comm
+results
+checkpoints
+bert-base-uncased
+*.zip
+__pycache__
+*.pyc

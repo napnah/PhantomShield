@@ -12,8 +12,10 @@ pub mod bindings;
 pub mod channel;
 pub mod prg;
 pub mod protocols;
+pub mod real_protocols;
 pub mod ring;
 pub mod simulate;
+pub mod tensor;
 
 use pyo3::prelude::*;
 

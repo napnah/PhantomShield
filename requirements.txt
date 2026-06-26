@@ -13,6 +13,8 @@ scikit-learn
 scipy
 modelscope
 numpy
+pytest>=7.0.0
+httpx>=0.24.0
 
 # Rust 扩展（可选，需 maturin develop）
 # 见 mcu_rust/pyproject.toml

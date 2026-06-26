@@ -79,6 +79,50 @@ pub fn party_multiply<C: PartyComm>(
     sub(s_i, correction)
 }
 
+pub fn party_multiply_batch<C: PartyComm>(
+    id: u8,
+    share_x: &[u64],
+    share_y: &[u64],
+    prg0: &mut PrgSync,
+    comm: &C,
+) -> Vec<u64> {
+    assert_eq!(share_x.len(), share_y.len(), "multiply batch length mismatch");
+    let mut masked_x = Vec::with_capacity(share_x.len());
+    let mut masked_y = Vec::with_capacity(share_y.len());
+    let mut corrections = Vec::with_capacity(share_x.len());
+
+    for (&x, &y) in share_x.iter().zip(share_y.iter()) {
+        let r_x = prg0.next();
+        let r_y = prg0.next();
+        if id == 0 {
+            masked_x.push(add(x, r_x));
+            masked_y.push(add(y, r_y));
+            corrections.push(add(add(mul(x, r_y), mul(y, r_x)), mul(r_x, r_y)));
+        } else {
+            masked_x.push(x);
+            masked_y.push(y);
+            corrections.push(add(mul(x, r_y), mul(y, r_x)));
+        }
+    }
+
+    comm.send_to_hp(Msg::MulVecToHp {
+        id,
+        mx: masked_x,
+        my: masked_y,
+    });
+    let hp_shares = comm.recv_from_hp().into_share_vec();
+    assert_eq!(
+        hp_shares.len(),
+        corrections.len(),
+        "HP multiply batch share length mismatch"
+    );
+    corrections
+        .into_iter()
+        .zip(hp_shares)
+        .map(|(correction, share)| sub(share, correction))
+        .collect()
+}
+
 /// HP 通过 Comm 处理一次乘法。
 pub fn hp_multiply<C: HpComm>(asprg_p0: &mut PrgSync, comm: &C) {
     let (_, mx0, my0) = comm.recv_from_p0().as_mul();
@@ -92,9 +136,35 @@ pub fn hp_multiply<C: HpComm>(asprg_p0: &mut PrgSync, comm: &C) {
     comm.send_to_p1(Msg::Share(s1));
 }
 
+pub fn hp_multiply_batch<C: HpComm>(n: usize, asprg_p0: &mut PrgSync, comm: &C) {
+    let msg0 = comm.recv_from_p0();
+    let msg1 = comm.recv_from_p1();
+    let (_, mx0, my0) = msg0.as_mul_vec();
+    let (_, mx1, my1) = msg1.as_mul_vec();
+    assert_eq!(mx0.len(), n, "p0 multiply batch x length mismatch");
+    assert_eq!(mx1.len(), n, "p1 multiply batch x length mismatch");
+    assert_eq!(my0.len(), n, "p0 multiply batch y length mismatch");
+    assert_eq!(my1.len(), n, "p1 multiply batch y length mismatch");
+    let mut out0 = Vec::with_capacity(n);
+    let mut out1 = Vec::with_capacity(n);
+    for i in 0..n {
+        let mx = add(mx0[i], mx1[i]);
+        let my = add(my0[i], my1[i]);
+        let product = mul(mx, my);
+        let s0 = asprg_p0.next();
+        let s1 = sub(product, s0);
+        out0.push(s0);
+        out1.push(s1);
+    }
+    comm.send_to_p0(Msg::ShareVec(out0));
+    comm.send_to_p1(Msg::ShareVec(out1));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::channel::make_mock;
+    use std::thread;
 
     #[test]
     fn core_matches_plaintext() {
@@ -106,5 +176,35 @@ mod tests {
         let y1 = y.wrapping_sub(y0);
         let (o0, o1) = multiply_core(x0, x1, y0, y1, 0xDEAD, 0xBEEF, 0x1234);
         assert_eq!(add(o0, o1), x.wrapping_mul(y));
+    }
+
+    #[test]
+    fn batch_comm_matches_plaintext() {
+        const SEED_SHARED: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+        const SEED_HP: [u8; 16] = [
+            16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+        ];
+        let x = [3u64, 7, 11, 19, u64::MAX - 4];
+        let y = [5u64, 13, 17, 23, 9];
+        let x0 = [100u64, 101, 102, 103, 104];
+        let y0 = [200u64, 201, 202, 203, 204];
+        let x1: Vec<u64> = x.iter().zip(x0.iter()).map(|(&v, &s)| sub(v, s)).collect();
+        let y1: Vec<u64> = y.iter().zip(y0.iter()).map(|(&v, &s)| sub(v, s)).collect();
+        let (p0, p1, hp) = make_mock();
+        let t0 = thread::spawn(move || {
+            party_multiply_batch(0, &x0, &y0, &mut PrgSync::new(&SEED_SHARED), &p0)
+        });
+        let t1 = thread::spawn(move || {
+            party_multiply_batch(1, &x1, &y1, &mut PrgSync::new(&SEED_SHARED), &p1)
+        });
+        let th =
+            thread::spawn(move || hp_multiply_batch(x.len(), &mut PrgSync::new(&SEED_HP), &hp));
+
+        let o0 = t0.join().unwrap();
+        let o1 = t1.join().unwrap();
+        th.join().unwrap();
+        for i in 0..x.len() {
+            assert_eq!(add(o0[i], o1[i]), mul(x[i], y[i]), "i={i}");
+        }
     }
 }

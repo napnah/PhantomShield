@@ -27,6 +27,8 @@ mcu_rust/target/
 
 # 实验输出
 results/
+experiments/*_docker_real_comm/shared/
+experiments/*_docker_real_comm/logs/
 
 # CrypTen 源码（第三方，非本项目）
 crypten_src/

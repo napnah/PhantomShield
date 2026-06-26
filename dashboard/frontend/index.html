@@ -180,6 +180,15 @@
         <textarea id="inputText">患者发烧38.5度，咳嗽三天，无胸痛，血氧饱和度95%</textarea>
         <button id="inferBtn" onclick="runInfer()">加密推理</button>
       </div>
+      <div class="infer-row" id="bertModeRow" style="display:none;margin-top:12px;align-items:center">
+        <span style="color:var(--ink-dim);font-size:14px;margin-right:8px">BERT 推理模式：</span>
+        <select id="bertMode" style="background:var(--bg);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:15px">
+          <option value="plaintext">明文基准</option>
+          <option value="crypten">CrypTen 12L + 2Quad</option>
+          <option value="mcu_rust" selected>MCU-Rust 12L</option>
+        </select>
+        <span id="methodTag" style="margin-left:12px;font-family:var(--mono);font-size:13px;color:var(--key)"></span>
+      </div>
       <div class="result" id="result">
         <div class="pred-main">
           <span class="pred-label" id="predLabel">—</span>
@@ -245,9 +254,9 @@ let currentScen = 'medical';
 const SCEN_DATA = {
   medical:   { title: '医疗辅助诊断', example: '患者发烧38.5度，咳嗽三天，无胸痛，血氧饱和度95%' },
   finance:   { title: '金融欺诈检测', example: '凌晨3点异地大额转账，收款方为新增账户，金额49800元' },
-  sentiment: { title: '舆情情感分析', example: '这家店的服务态度极差，等了一个小时菜还没上，再也不来了' },
+  sentiment: { title: '舆情情感分析 (BERT English)', example: 'This movie is wonderful and heartwarming.' },
 };
-const PERF = {
+let PERF = {
   latency: [
     { method: '明文推理', v: 0.8, color: '#34e08a' },
     { method: 'CrypTen原始', v: 71.0, color: '#ff4d57' },
@@ -263,6 +272,34 @@ const PERF = {
   ]
 };
 
+
+async function loadPerf() {
+  try {
+    const res = await fetch(API + '/api/perf');
+    const data = await res.json();
+    if (data.latency) {
+      PERF.latency = data.latency.map((d, i) => ({
+        method: d.method, v: d.v,
+        color: ['#34e08a', '#ff4d57', '#4d9fff', '#ffa040'][i % 4],
+      }));
+    }
+    if (data.accuracy && data.accuracy.length) {
+      const a = data.accuracy[0];
+      PERF.acc = [{
+        task: a.task || 'SST-2 mini',
+        sec: (a.crypten || 0).toFixed(1),
+        mcu: (a.mcu || 0).toFixed(1),
+        win: (a.mcu || 0) >= (a.crypten || 0),
+      }];
+    }
+    renderLatency();
+    renderAcc();
+  } catch (e) {
+    renderLatency();
+    renderAcc();
+  }
+}
+
 function switchScen(scen) {
   currentScen = scen;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.scen === scen));
@@ -271,6 +308,7 @@ function switchScen(scen) {
   document.getElementById('result').classList.remove('show');
   document.getElementById('logBox').innerHTML = '<div class="log-line"><span class="log-detail" style="color:var(--ink-dim)">等待推理启动...</span></div>';
   document.getElementById('leakCipher').textContent = '[等待推理...]';
+  document.getElementById('bertModeRow').style.display = (scen === 'sentiment') ? 'flex' : 'none';
 }
 function renderLatency() {
   const max = Math.max(...PERF.latency.map(d => d.v));
@@ -292,7 +330,13 @@ async function runInfer() {
   btn.disabled = true; btn.textContent = '推理中...';
   const logBox = document.getElementById('logBox'); logBox.innerHTML = '';
   try {
-    const res = await fetch(API + '/api/infer', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text, scenario: currentScen }) });
+    let res;
+    if (currentScen === 'sentiment') {
+      const mode = document.getElementById('bertMode').value;
+      res = await fetch(API + '/api/infer/semantic', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text, mode, max_seq_len: 32 }) });
+    } else {
+      res = await fetch(API + '/api/infer', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text, scenario: currentScen }) });
+    }
     const data = await res.json();
     const logData = await (await fetch(API + '/api/logs')).json();
     const cmpData = await (await fetch(API + '/api/compare', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text, scenario: currentScen }) })).json();
@@ -303,9 +347,10 @@ async function runInfer() {
       logBox.appendChild(line); logBox.scrollTop = logBox.scrollHeight;
     }
     document.getElementById('result').classList.add('show');
-    document.getElementById('predLabel').textContent = data.top_prediction;
+    document.getElementById('predLabel').textContent = data.top_prediction || data.label;
     document.getElementById('predConf').textContent = '置信度 ' + data.confidence + '%';
-    document.getElementById('predMeta').textContent = `${data.elapsed_seconds}s · ${data.comm_rounds}轮通信`;
+    document.getElementById('predMeta').textContent = data.method ? (data.method + ' · ' + data.elapsed_seconds + 's') : (`${data.elapsed_seconds}s · ${data.comm_rounds}轮通信`);
+    if (data.method) document.getElementById('methodTag').textContent = data.method;
     document.getElementById('distBox').innerHTML = data.distribution.map(d => `
       <div class="dist-row"><div class="dist-name">${d.label}</div><div class="dist-track"><div class="dist-fill" style="width:${d.prob}%"></div></div><div class="dist-val">${d.prob}%</div></div>`).join('');
     document.getElementById('attnWords').innerHTML = data.attention.map(a => `<span class="attn-word" style="${attnColor(a.weight)}">${a.word}</span>`).join('');
@@ -353,7 +398,7 @@ function matrixRain() {
   }, 70);
   addEventListener('resize', () => { c.width = innerWidth; c.height = innerHeight; });
 }
-matrixRain(); renderLatency(); renderAcc();
+matrixRain(); loadPerf();
 </script>
 </body>
 </html>

@@ -1,0 +1,133 @@
+name: phantomshield-mpc
+
+services:
+  mcu-hp:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mcu
+    image: phantomshield-mcu:local
+    environment:
+      MCU_ROLE: hp
+      MCU_KIND: ${MCU_KIND:-tensor}
+      MCU_OP: ${MCU_OP:-elemul}
+      MCU_PORT: ${MCU_PORT:-9200}
+      MCU_LEN: ${MCU_LEN:-64}
+      MCU_M: ${MCU_M:-4}
+      MCU_K: ${MCU_K:-16}
+      MCU_N: ${MCU_N:-16}
+      MCU_OUT_DIR: ${MCU_OUT_DIR:-/workspace/out/default}
+    volumes:
+      - ${PHANTOM_OUT_HOST:-../experiments/docker_runs}:/workspace/out
+    networks:
+      - mpcnet
+
+  mcu-p0:
+    image: phantomshield-mcu:local
+    depends_on:
+      - mcu-hp
+    environment:
+      MCU_ROLE: p0
+      MCU_KIND: ${MCU_KIND:-tensor}
+      MCU_OP: ${MCU_OP:-elemul}
+      MCU_PORT: ${MCU_PORT:-9200}
+      MCU_LEN: ${MCU_LEN:-64}
+      MCU_M: ${MCU_M:-4}
+      MCU_K: ${MCU_K:-16}
+      MCU_N: ${MCU_N:-16}
+      MCU_OUT_DIR: ${MCU_OUT_DIR:-/workspace/out/default}
+      MCU_START_DELAY: ${MCU_START_DELAY:-1}
+    volumes:
+      - ${PHANTOM_OUT_HOST:-../experiments/docker_runs}:/workspace/out
+    networks:
+      - mpcnet
+
+  mcu-p1:
+    image: phantomshield-mcu:local
+    depends_on:
+      - mcu-hp
+    environment:
+      MCU_ROLE: p1
+      MCU_KIND: ${MCU_KIND:-tensor}
+      MCU_OP: ${MCU_OP:-elemul}
+      MCU_PORT: ${MCU_PORT:-9200}
+      MCU_LEN: ${MCU_LEN:-64}
+      MCU_M: ${MCU_M:-4}
+      MCU_K: ${MCU_K:-16}
+      MCU_N: ${MCU_N:-16}
+      MCU_OUT_DIR: ${MCU_OUT_DIR:-/workspace/out/default}
+      MCU_START_DELAY: ${MCU_START_DELAY:-1}
+    volumes:
+      - ${PHANTOM_OUT_HOST:-../experiments/docker_runs}:/workspace/out
+    networks:
+      - mpcnet
+
+  mcu-verify:
+    image: phantomshield-mcu:local
+    environment:
+      MCU_ROLE: verify
+      MCU_KIND: ${MCU_KIND:-tensor}
+      MCU_OP: ${MCU_OP:-elemul}
+      MCU_PORT: ${MCU_PORT:-9200}
+      MCU_LEN: ${MCU_LEN:-64}
+      MCU_M: ${MCU_M:-4}
+      MCU_K: ${MCU_K:-16}
+      MCU_N: ${MCU_N:-16}
+      MCU_OUT_DIR: ${MCU_OUT_DIR:-/workspace/out/default}
+    volumes:
+      - ${PHANTOM_OUT_HOST:-../experiments/docker_runs}:/workspace/out
+    networks:
+      - mpcnet
+
+  crypten-r0:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.crypten
+    image: phantomshield-crypten:local
+    environment:
+      RANK: 0
+      WORLD_SIZE: 2
+      RENDEZVOUS: tcp://crypten-r0:29500
+      DISTRIBUTED_BACKEND: gloo
+      CRYPTEN_OP: ${CRYPTEN_OP:-elemul}
+      CRYPTEN_REPEAT: ${CRYPTEN_REPEAT:-5}
+      CRYPTEN_LEN: ${CRYPTEN_LEN:-64}
+      CRYPTEN_M: ${CRYPTEN_M:-4}
+      CRYPTEN_K: ${CRYPTEN_K:-16}
+      CRYPTEN_N: ${CRYPTEN_N:-16}
+      CRYPTEN_BATCH: ${CRYPTEN_BATCH:-1}
+      CRYPTEN_SOFTMAX_ROWS: ${CRYPTEN_SOFTMAX_ROWS:-16}
+      CRYPTEN_SOFTMAX_COLS: ${CRYPTEN_SOFTMAX_COLS:-4}
+      CRYPTEN_OUT_DIR: ${CRYPTEN_OUT_DIR:-/workspace/out/default}
+    volumes:
+      - ${PHANTOM_OUT_HOST:-../experiments/docker_runs}:/workspace/out
+    networks:
+      - mpcnet
+
+  crypten-r1:
+    image: phantomshield-crypten:local
+    depends_on:
+      - crypten-r0
+    environment:
+      RANK: 1
+      WORLD_SIZE: 2
+      RENDEZVOUS: tcp://crypten-r0:29500
+      DISTRIBUTED_BACKEND: gloo
+      CRYPTEN_OP: ${CRYPTEN_OP:-elemul}
+      CRYPTEN_REPEAT: ${CRYPTEN_REPEAT:-5}
+      CRYPTEN_LEN: ${CRYPTEN_LEN:-64}
+      CRYPTEN_M: ${CRYPTEN_M:-4}
+      CRYPTEN_K: ${CRYPTEN_K:-16}
+      CRYPTEN_N: ${CRYPTEN_N:-16}
+      CRYPTEN_BATCH: ${CRYPTEN_BATCH:-1}
+      CRYPTEN_SOFTMAX_ROWS: ${CRYPTEN_SOFTMAX_ROWS:-16}
+      CRYPTEN_SOFTMAX_COLS: ${CRYPTEN_SOFTMAX_COLS:-4}
+      CRYPTEN_OUT_DIR: ${CRYPTEN_OUT_DIR:-/workspace/out/default}
+      CRYPTEN_START_DELAY: ${CRYPTEN_START_DELAY:-1}
+    volumes:
+      - ${PHANTOM_OUT_HOST:-../experiments/docker_runs}:/workspace/out
+    networks:
+      - mpcnet
+
+networks:
+  mpcnet:
+    driver: bridge

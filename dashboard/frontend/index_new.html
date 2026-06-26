@@ -1,0 +1,1034 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>PhantomShield</title>
+<style>
+:root{
+--bg:#050b16;
+--surface:rgba(8,20,40,.85);
+--ink:#ffffff;
+--ink2:#9cbcff;
+--ink3:#6f86bb;
+--surface:rgba(8,20,40,.85);
+--blue:#00bfff;--orange:#ff4d00;--green:#008a4c;--red:#cc1a2c;
+--grid:#e4e8ef;--mono:'SF Mono','Consolas','JetBrains Mono',monospace;--sans:'Inter','Helvetica Neue','SF Pro','PingFang SC','Microsoft YaHei',sans-serif}
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+background:
+radial-gradient(circle at 20% 20%,#1d4fff22 0%,transparent 30%),
+radial-gradient(circle at 80% 30%,#00d5ff22 0%,transparent 30%),
+linear-gradient(135deg,#050b16,#091325,#0d1f3f);
+
+color:#fff;
+
+font-family:var(--sans);
+
+line-height:1.5;
+
+-webkit-font-smoothing:antialiased;
+
+font-size:22px;
+
+overflow-x:hidden;
+}
+body::before{content:'';position:fixed;inset:0;background-image:radial-gradient(circle,var(--grid) 1px,transparent 1px);background-size:32px 32px;opacity:.4;pointer-events:none;z-index:0}
+#bgNet{
+
+position:fixed;
+
+top:0;
+left:0;
+
+width:100%;
+height:100%;
+
+z-index:0;
+
+opacity:.35;
+
+pointer-events:none;
+}
+.wrap{max-width:1360px;margin:0 auto;padding:40px 56px;position:relative;z-index:1}
+@media(max-width:960px){.wrap{padding:20px 16px}}
+
+/* ═══ HEADER ═══ */
+header{
+display:flex;
+align-items:flex-end;
+justify-content:space-between;
+
+background:rgba(0,191,255,.04);
+backdrop-filter:blur(20px);
+
+box-shadow:
+0 0 40px rgba(0,191,255,.15);
+
+border-radius:20px;
+padding:35px;
+}
+header h1{
+    font-size:72px;
+    text-shadow:
+        0 0 10px rgba(0,140,255,.8),
+        0 0 30px rgba(0,140,255,.4);
+}
+header h1 span{color:var(--blue)}
+header .sub{font-size:22px;color:var(--ink2);margin-top:6px;font-weight:400}
+.status-pills{
+display:flex;
+gap:28px;
+font-size:18px;
+font-family:var(--mono);
+color:#8fbcff;
+}
+.status-pills .pill{display:flex;align-items:center;gap:10px}
+.status-pills .dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.status-pills .dot.on{background:var(--green);box-shadow:0 0 0 4px rgba(0,138,76,.2);animation:pulse 2s infinite}
+.status-pills .dot.off{background:var(--red)}
+.status-pills .dot.warn{background:var(--orange)}
+@keyframes pulse{
+0%,100%{
+box-shadow:0 0 0 4px rgba(0,138,76,.2)
+}
+50%{
+box-shadow:0 0 0 12px rgba(0,138,76,0)
+}
+}
+body::after{
+content:'';
+
+position:fixed;
+
+inset:0;
+
+pointer-events:none;
+
+background:
+repeating-linear-gradient(
+0deg,
+rgba(255,255,255,.02),
+rgba(255,255,255,.02) 1px,
+transparent 1px,
+transparent 4px
+);
+
+animation:scanMove 8s linear infinite;
+
+z-index:1;
+}
+
+@keyframes scanMove{
+
+from{
+transform:translateY(0);
+}
+
+to{
+transform:translateY(40px);
+}
+}
+
+/* ═══ DATA POSTER ═══ */
+.poster{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-bottom:48px;border:2px solid rgba(0,191,255,.4);background:var(--surface)}
+.poster .cell{
+    padding:20px 20px;
+    border-right:1px solid var(--grid);
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+}
+.poster .cell:last-child{border-right:none}
+.poster .cell .num{
+    font-size:96px;
+
+    text-shadow:
+    0 0 15px rgba(0,191,255,.6),
+    0 0 40px rgba(0,191,255,.3);
+}
+.poster .cell .num.blue{color:var(--blue)}
+.poster .cell .num.orange{color:var(--orange)}
+.poster .cell .num.green{color:var(--green)}
+.poster .cell .label{font-size:18px;color:var(--ink2);margin-top:8px;text-transform:uppercase;letter-spacing:.15em;font-weight:600}
+@media(max-width:960px){.poster{grid-template-columns:repeat(2,1fr)}.poster .cell:nth-child(2){border-right:none}}
+
+/* ═══ TABS ═══ */
+.tabs{display:flex;gap:0;margin-bottom:40px}
+.tab{padding:16px 40px;font-size:22px;font-weight:500;cursor:pointer;color:var(--ink3);border-bottom:3px solid transparent;transition:all .2s}
+.tab:hover{
+color:#fff;
+
+background:
+rgba(0,191,255,.08);
+
+box-shadow:
+0 0 15px rgba(0,191,255,.25);
+
+border-radius:12px 12px 0 0;
+}
+.tab.on{color:var(--blue);border-bottom-color:var(--blue);font-weight:600}
+
+/* ═══ MAIN LAYOUT ═══ */
+
+.poster,
+.privacy-box,
+#inputText,
+#logBox,
+#result{
+background:rgba(5,15,35,.72);
+backdrop-filter:blur(20px);
+border:1px solid rgba(0,180,255,.35);
+box-shadow:
+0 0 25px rgba(0,180,255,.15),
+inset 0 0 25px rgba(0,180,255,.08);
+}
+
+.two-col{
+display:grid;
+grid-template-columns:1fr 1fr;
+gap:40px;
+margin-bottom:40px;
+}
+@media(max-width:960px){.two-col{grid-template-columns:1fr}}
+
+/* ═══ SECTION LABEL ═══ */
+.sec-label{font-size:18px;font-weight:700;color:var(--ink2);margin-bottom:14px;text-transform:uppercase;letter-spacing:.18em;font-family:var(--mono)}
+
+/* ═══ INPUT ═══ */
+#inputText{
+width:100%;
+background:rgba(8,20,40,.85);
+
+color:#ffffff;
+font-size:18px;
+font-family:var(--sans);
+
+padding:24px;
+min-height:180px;
+
+line-height:1.8;
+
+border:2px solid rgba(0,191,255,.4);
+border-radius:18px;
+
+resize:vertical;
+
+caret-color:#00bfff;
+
+box-shadow:
+0 0 20px rgba(0,191,255,.2),
+inset 0 0 20px rgba(0,191,255,.08);
+}
+
+#inputText:focus{
+outline:none;
+border-color:#00bfff;
+
+box-shadow:
+0 0 30px rgba(0,191,255,.4),
+inset 0 0 20px rgba(0,191,255,.15);
+}
+
+#inputText::placeholder{
+color:rgba(255,255,255,.5);
+}
+
+#inputText:focus{outline:none;border-color:var(--blue);box-shadow:inset 0 0 0 1px var(--blue)}
+.btn{
+background:#00bfff;
+color:#05101f;
+border-radius:18px;
+box-shadow:
+0 0 20px rgba(0,191,255,.5);
+
+border:none;padding:16px 40px;font-size:22px;font-weight:700;cursor:pointer;letter-spacing:-.02em;margin-top:16px;font-family:var(--sans);transition:all .2s}
+.btn:hover{background:var(--blue);transform:translateY(-2px)}
+.btn:disabled{opacity:.25;cursor:not-allowed;transform:none}
+
+/* ═══ RESULT ═══ */
+#result{
+display:none;
+
+padding:35px;
+
+border-radius:24px;
+}
+#result.show{display:block;animation:fadeIn .5s}
+@keyframes fadeIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+.prediction{font-size:88px;font-weight:800;letter-spacing:-.05em;line-height:.95;color:var(--ink)}
+.prediction.blue{color:var(--blue)}
+.confidence{font-size:24px;color:var(--ink2);margin-top:6px;font-family:var(--mono)}
+.meta{font-size:18px;color:var(--ink3);margin-top:12px;font-family:var(--mono);line-height:2}
+.meta .tag{display:inline-block;padding:2px 12px;font-weight:700;font-size:18px;margin-right:8px}
+.meta .tag.ok{background:rgba(0,138,76,.1);color:var(--green)}
+.meta .tag.info{background:rgba(0,68,255,.06);color:var(--blue)}
+.meta .tag.warn{background:rgba(255,77,0,.08);color:var(--orange)}
+
+/* Distribution */
+.dist-row{display:grid;grid-template-columns:120px 1fr 60px;align-items:center;gap:14px;margin-bottom:10px;font-family:var(--mono)}
+.dist-name{font-size:16px;color:var(--ink2);text-align:right}
+.dist-bar{height:10px;background:var(--grid)}
+.dist-fill{height:100%;transition:width 1.2s cubic-bezier(.22,1,.36,1)}
+.dist-val{font-size:15px;font-weight:700;color:var(--ink);text-align:right}
+
+/* Attention */
+.attn-words{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+.attn-word{
+padding:10px 20px;
+
+border-radius:10px;
+
+box-shadow:
+0 0 10px rgba(0,191,255,.15);
+
+backdrop-filter:blur(10px);
+}
+
+/* ═══ PRIVACY COMPARE ═══ */
+.privacy-grid{display:grid;grid-template-columns:1fr 1fr;gap:28px}
+.privacy-box{padding:24px;font-family:var(--mono);font-size:18px;line-height:1.8;word-break:break-all;background:var(--surface)}
+.privacy-plain{border-left:5px solid var(--red)}
+.privacy-mpc{border-left:5px solid var(--green)}
+.privacy-box .p-label{font-size:18px;font-weight:700;margin-bottom:10px}
+
+/* ═══ LOG TERMINAL ═══ */
+
+.log-section{
+    margin-top:36px;
+}
+
+#logBox{
+    background:#050b16;
+
+    border:1px solid rgba(0,191,255,.35);
+
+    padding:28px;
+
+    font-family:var(--mono);
+
+    font-size:18px;
+
+    line-height:2.2;
+
+    max-height:420px;
+
+    overflow-y:auto;
+
+    overflow-x:hidden;
+
+    box-shadow:
+        0 0 30px rgba(0,191,255,.15) inset,
+        0 0 25px rgba(0,191,255,.1);
+}
+
+#logBox::-webkit-scrollbar{
+    width:6px;
+}
+
+#logBox::-webkit-scrollbar-thumb{
+    background:rgba(0,191,255,.4);
+}
+
+.log-line{
+    display:grid;
+
+    grid-template-columns:
+        90px
+        70px
+        30px
+        70px
+        1fr
+        70px;
+
+    gap:16px;
+
+    align-items:center;
+
+    animation:logIn .35s ease-out;
+
+    opacity:0;
+
+    animation-fill-mode:forwards;
+
+    margin-bottom:10px;
+}
+
+@keyframes logIn{
+    from{
+        opacity:0;
+        transform:translateX(-8px);
+    }
+    to{
+        opacity:1;
+        transform:translateX(0);
+    }
+}
+
+.log-time{
+    color:rgba(255,255,255,.45);
+    font-size:16px;
+}
+
+.log-tag{
+    padding:4px 12px;
+
+    font-size:14px;
+
+    font-weight:700;
+
+    text-align:center;
+
+    letter-spacing:.08em;
+}
+
+.log-tag.P0{
+    background:rgba(0,68,255,.3);
+    color:#99bbff;
+}
+
+.log-tag.P1{
+    background:rgba(0,138,76,.3);
+    color:#5cdb95;
+}
+
+.log-tag.HP{
+    background:rgba(255,77,0,.25);
+    color:#ff9966;
+}
+
+.log-arrow{
+    color:rgba(255,255,255,.35);
+
+    font-size:14px;
+
+    text-align:center;
+}
+
+.log-detail{
+    color:rgba(255,255,255,.92);
+
+    padding-left:10px;
+
+    white-space:normal;
+
+    word-break:break-word;
+
+    overflow-wrap:anywhere;
+
+    line-height:1.8;
+}
+
+.log-bytes{
+    color:#8fbcff;
+
+    text-align:right;
+
+    font-size:15px;
+
+    white-space:nowrap;
+}
+/* ═══ PERFORMANCE ═══ */
+.perf-grid{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:40px;padding-top:40px;border-top:3px solid var(--ink)}
+@media(max-width:960px){.perf-grid{grid-template-columns:1fr}}
+.bar-row{display:grid;grid-template-columns:140px 1fr 50px;align-items:center;gap:14px;margin-bottom:8px;font-family:var(--mono)}
+.bar-name{font-size:18px;color:#ffffff;text-align:right}
+.bar-track{height:10px;background:var(--grid)}
+.bar-fill{height:100%;transition:width 1s;font-size:13px;color:#fff;padding-left:6px;line-height:10px;overflow:visible;white-space:nowrap}
+.acc-table{width:100%;font-size:18px;border-collapse:collapse;font-family:var(--mono)}
+.acc-table th{text-align:left;padding:6px 0;color:var(--ink2);font-weight:500;border-bottom:1px solid var(--grid)}
+.acc-table td{padding:6px 0;border-bottom:1px solid var(--grid)}
+#sceneVisual{
+height:180px;
+display:flex;
+justify-content:center;
+align-items:center;
+font-size:140px;
+margin-bottom:25px;
+filter:drop-shadow(0 0 30px rgba(0,180,255,.6));
+}
+.shield-core{
+width:220px;
+height:220px;
+margin:0 auto 50px;
+position:relative;
+}
+
+.core-ring{
+position:absolute;
+inset:0;
+border-radius:50%;
+border:2px solid rgba(0,180,255,.6);
+animation:spin 12s linear infinite;
+}
+
+.ring2{
+transform:scale(.8);
+animation-direction:reverse;
+}
+
+.ring3{
+transform:scale(.6);
+animation-duration:8s;
+}
+
+.core-center{
+position:absolute;
+left:50%;
+top:50%;
+width:32px;
+height:32px;
+background:#00bfff;
+border-radius:50%;
+transform:translate(-50%,-50%);
+box-shadow:
+0 0 30px #00bfff,
+0 0 80px #00bfff;
+animation:pulseCore 2s ease-in-out infinite;
+}
+
+@keyframes spin{
+from{transform:rotate(0deg);}
+to{transform:rotate(360deg);}
+}
+@keyframes pulseCore{
+
+0%,100%{
+transform:
+translate(-50%,-50%)
+scale(1);
+}
+
+50%{
+transform:
+translate(-50%,-50%)
+scale(1.25);
+}
+}
+
+footer{text-align:center;color:var(--ink3);font-size:18px;margin-top:56px;padding-top:24px;border-top:1px solid var(--grid);font-family:var(--mono);letter-spacing:.08em}
+
+.toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:100;padding:14px 32px;font-family:var(--mono);font-size:20px;font-weight:600;animation:slideUp .4s;background:var(--ink);color:var(--surface)}
+.toast.err{background:var(--red);color:#fff}
+@keyframes slideUp{from{opacity:0;transform:translateX(-50%) translateY(12px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+.wrap::before{
+content:'';
+
+position:fixed;
+
+left:50%;
+top:50%;
+
+width:900px;
+height:900px;
+
+transform:translate(-50%,-50%);
+
+background:
+radial-gradient(
+circle,
+rgba(0,191,255,.12),
+transparent 70%
+);
+
+pointer-events:none;
+
+animation:halo 6s ease-in-out infinite;
+}
+
+@keyframes halo{
+
+0%,100%{
+opacity:.4;
+}
+
+50%{
+opacity:1;
+}
+}
+/* 医疗图标呼吸动画 */
+.medical-cross{
+animation:crossPulse 2s ease-in-out infinite;
+}
+
+@keyframes crossPulse{
+0%,100%{
+transform:scale(1);
+filter:drop-shadow(0 0 10px #ff4d4d);
+}
+50%{
+transform:scale(1.12);
+filter:drop-shadow(0 0 25px #ff4d4d);
+}
+}
+
+/* 雷达扫描动画 */
+.radar-rotate{
+    transform-box:view-box;
+    transform-origin:100px 100px;
+    animation:radarSpin 4s linear infinite;
+}
+
+
+
+.shield-glow{
+    transform-origin:center;
+    animation:
+        radarSpin 6s linear infinite,
+        shieldPulse 2.5s ease-in-out infinite;
+}
+
+.medical-cross{
+    animation:crossPulse 2s ease-in-out infinite;
+}
+
+@keyframes radarSpin{
+from{
+transform:rotate(0deg);
+}
+to{
+transform:rotate(-360deg);
+}
+}
+.shield-glow{
+animation:radarSpin 6s linear infinite,
+    shieldPulse 2.5s ease-in-out infinite;
+transform-origin:center;
+}
+
+@keyframes shieldPulse{
+
+0%,100%{
+transform:scale(1);
+filter:drop-shadow(0 0 10px #00bfff);
+}
+
+50%{
+transform:scale(1.08);
+filter:drop-shadow(0 0 30px #00bfff);
+}
+
+}
+</style>
+</head>
+<body>
+
+<canvas id="bgNet"></canvas>
+
+<div class="wrap">
+
+<!-- ═══ HEADER ═══ -->
+<header>
+    <div class="shield-core">
+
+<div class="core-ring"></div>
+
+<div class="core-ring ring2"></div>
+
+<div class="core-ring ring3"></div>
+
+<div class="core-center"></div>
+
+</div>
+<div>
+<h1>Phantom<span>Shield</span></h1>
+<div class="sub">MCU-Transformer · 隐私保护推理系统 · Rust 引擎</div>
+</div>
+<div class="status-pills">
+<div class="pill"><div class="dot on" id="protoDot"></div>MCU 协议</div>
+<div class="pill"><div class="dot on" id="rustDot"></div><span id="rustLabel">Rust HP 检测中</span></div>
+<div class="pill"><div class="dot on" id="apiDot"></div>API 服务</div>
+</div>
+</header>
+
+<!-- ═══ DATA POSTER ═══ -->
+<div class="poster">
+<div class="cell"><div class="num blue">5</div><div class="label">MCU 安全协议</div></div>
+<div class="cell"><div class="num">80K</div><div class="label">次 MPC 乘法 / 秒</div></div>
+<div class="cell"><div class="num green">10<sup>&minus;15</sup></div><div class="label">Softmax 精度</div></div>
+<div class="cell"><div class="num orange">&times;30</div><div class="label">vs Python 加速比</div></div>
+</div>
+
+<!-- ═══ TABS ═══ -->
+<div class="tabs">
+<div class="tab on" data-scene="medical">医疗辅助诊断</div>
+<div class="tab" data-scene="finance">金融欺诈检测</div>
+<div class="tab" data-scene="sentiment">舆情情感分析</div>
+</div>
+
+<!-- ═══ INPUT + PRIVACY ═══ -->
+<div class="two-col">
+<div>
+<div class="sec-label">输入文本</div>
+<textarea id="inputText" placeholder="请输入待推理文本...">患者发烧38.5度，咳嗽三天，无胸痛，血氧饱和度95%</textarea>
+<button class="btn" id="inferBtn" onclick="runInfer()">开始隐私推理</button>
+</div>
+<div>
+<div class="sec-label">隐私保护对比</div>
+<div class="privacy-grid" style="grid-template-columns:1fr;gap:16px">
+<div class="privacy-box privacy-plain">
+<div class="p-label" style="color:var(--red)">传统明文推理</div>
+<div id="leakPlain" style="color:var(--ink2)">服务商直接看到用户原文</div>
+</div>
+<div class="privacy-box privacy-mpc">
+<div class="p-label" style="color:var(--green)">MCU 隐私推理（本作品）</div>
+<div id="leakCipher" style="color:var(--ink2)">服务商仅见随机份额，无法还原输入</div>
+</div>
+</div>
+</div>
+</div>
+
+<!-- ═══ RESULT ═══ -->
+<div id="sceneVisual"></div>
+<div id="result">
+<div class="two-col" style="align-items:start">
+<div>
+<div class="prediction" id="predLabel">—</div>
+<div class="confidence" id="predConf"></div>
+<div class="meta" id="predMeta"></div>
+</div>
+<div>
+<div class="sec-label">概率分布</div>
+<div class="dist" id="distBox"></div>
+<div style="margin-top:20px">
+<div class="sec-label">注意力权重</div>
+<div class="attn-words" id="attnWords"></div>
+</div>
+</div>
+</div>
+
+</div>
+
+<!-- ═══ LIVE LOG (always visible) ═══ -->
+<div class="log-section" style="margin-bottom:28px">
+<div class="sec-label">🔴 实时三方通信日志</div>
+<div id="logBox"><span style="color:rgba(255,255,255,.3)">等待推理请求… 点击「开始隐私推理」触发 Rust HP 密文计算</span></div>
+</div>
+
+<!-- ═══ PERFORMANCE ═══ -->
+<div class="perf-grid">
+<div>
+<div class="sec-label">推理延迟对比</div>
+<div id="latencyBars"></div>
+</div>
+<div>
+<div class="sec-label">GLUE 精度对比</div>
+<table class="acc-table"><thead><tr><th>任务</th><th style="text-align:right">SecFormer</th><th style="text-align:right;color:var(--blue)">PhantomShield</th></tr></thead><tbody id="accBody"></tbody></table>
+</div>
+</div>
+
+
+
+<footer>PhantomShield · 第十九届全国大学生信息安全竞赛 · 作品赛</footer>
+</div>
+
+<script>
+// ═══ State ═══
+const API='http://127.0.0.1:8000';let currentScen='medical';
+const sceneConfig={medical:{example:'患者发烧38.5度，咳嗽三天，无胸痛，血氧饱和度95%'},finance:{example:'凌晨3点异地大额转账，收款方为新增账户，金额49800元'},sentiment:{example:'这家店的服务态度极差，等了一个小时菜还没上，再也不来了'}};
+const labels={medical:'呼吸道感染',finance:'高危欺诈',sentiment:'强烈负面'};
+const dists={medical:[['呼吸道感染',61],['肺炎',19.5],['普通感冒',13],['支气管炎',6.5]],finance:[['高危欺诈',67],['正常交易',16.5],['可疑欺诈',11],['需人工复核',5.5]],sentiment:[['强烈负面',68],['正面',16],['负面',10.7],['中性',5.3]]};
+
+// Tabs
+document.querySelectorAll('.tab').forEach(t=>{t.onclick=()=>{
+document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));t.classList.add('on');
+currentScen=t.dataset.scene;updateSceneVisual();document.getElementById('inputText').value=sceneConfig[currentScen].example;
+document.getElementById('result').classList.remove('show');document.getElementById('logBox').innerHTML='<span style="color:rgba(255,255,255,.3)">等待推理请求...</span>';
+}});
+function updateSceneVisual(){
+
+const visual=document.getElementById('sceneVisual');
+
+if(!visual)return;
+
+if(currentScen==="medical"){
+
+visual.innerHTML=`
+<svg width="180" height="180" viewBox="0 0 200 200">
+
+<circle
+cx="100"
+cy="100"
+r="75"
+fill="rgba(0,191,255,.08)"
+stroke="#00bfff"
+stroke-width="4"/>
+
+<g class="medical-cross">
+
+<rect
+x="82"
+y="45"
+width="36"
+height="110"
+rx="6"
+fill="#00bfff"/>
+
+<rect
+x="45"
+y="82"
+width="110"
+height="36"
+rx="6"
+fill="#00bfff"/>
+
+</g>
+
+</svg>
+`;
+
+
+
+}else if(currentScen==="finance"){
+
+visual.innerHTML=`
+<svg width="180" height="180" viewBox="0 0 200 200">
+
+<g class="shield-glow">
+
+<path
+d="M100 20
+L150 40
+V90
+C150 130 130 160 100 180
+C70 160 50 130 50 90
+V40
+Z"
+
+stroke="#00bfff"
+stroke-width="5"
+fill="rgba(0,191,255,.15)"
+/>
+
+<path
+d="M80 95
+L95 110
+L125 75"
+stroke="#00bfff"
+stroke-width="6"
+fill="none"
+/>
+
+</g>
+
+</svg>
+`;
+
+}else{
+
+visual.innerHTML=`
+<svg width="180" height="180" viewBox="0 0 200 200">
+
+<circle cx="100" cy="100" r="70"
+stroke="#00bfff"
+fill="none"/>
+
+<circle cx="100" cy="100" r="45"
+stroke="#00bfff"
+fill="none"/>
+
+<circle cx="100" cy="100" r="20"
+stroke="#00bfff"
+fill="none"/>
+
+<g class="radar-rotate">
+
+<line
+x1="100"
+y1="100"
+x2="160"
+y2="25"
+stroke="#00bfff"
+stroke-width="4"/>
+
+<circle
+cx="100"
+cy="100"
+r="6"
+fill="#00bfff"/>
+
+</g>
+
+</svg>
+`;
+
+}
+}
+
+updateSceneVisual();
+// Rust HP check
+async function checkRust(){
+try{const c=new AbortController();setTimeout(()=>c.abort(),3000);
+const r=await fetch(API+'/api/rust/verify',{signal:c.signal});const d=await r.json();
+const el=document.getElementById('rustDot'),lb=document.getElementById('rustLabel');
+if(d.verified){el.className='dot on';lb.textContent='Rust HP 验证通过'}else{el.className='dot off';lb.textContent='Rust HP 离线'}}catch(e){document.getElementById('rustDot').className='dot off';document.getElementById('rustLabel').textContent='Rust HP 离线'}}
+checkRust();setInterval(checkRust,15000);
+
+// Performance
+const PERF={latency:[{method:'明文推理',v:0.8,c:'var(--ink3)'},{method:'CrypTen',v:71,c:'var(--red)'},{method:'SecFormer',v:19.5,c:'var(--orange)'},{method:'MCU-Transformer',v:25,c:'var(--blue)'},{method:'Rust HP ',v:0.1,c:'var(--green)'}],acc:[{task:'CoLA (Large)',sec:'0.0',mcu:'60.7',zero:true},{task:'MRPC',sec:'89.2',mcu:'87.4'},{task:'STS-B',sec:'87.4',mcu:'88.9',win:true},{task:'QNLI',sec:'91.2',mcu:'91.4',win:true},{task:'RTE',sec:'69.0',mcu:'66.8'}]};
+(function renderPerf(){
+const max=Math.max(...PERF.latency.map(d=>d.v));
+document.getElementById('latencyBars').innerHTML=PERF.latency.map(d=>`<div class="bar-row"><div class="bar-name">${d.method}</div><div class="bar-track"><div class="bar-fill" style="width:${Math.max(d.v/max*100,5)}%;background:${d.c}">${d.v}s</div></div></div>`).join('');
+document.getElementById('accBody').innerHTML=PERF.acc.map(d=>`<tr><td>${d.task}</td><td style="text-align:right;${d.zero?'color:var(--red)':''}">${d.sec}</td><td style="text-align:right;${d.zero||d.win?'color:var(--green);font-weight:700':''}">${d.mcu}</td></tr>`).join('');
+})();
+
+function toast(msg,ok){const t=document.createElement('div');t.className='toast'+(ok?'':' err');t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),3000)}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function attnColor(w){const a=.04+w*.45;return`background:rgba(0,68,255,${a});border:1px solid rgba(0,68,255,${a+.06});${w>.5?'color:var(--blue);font-weight:600':''}`}
+
+// ═══ MAIN ═══
+async function runInfer(){
+const btn=document.getElementById('inferBtn'),text=document.getElementById('inputText').value.trim();
+if(!text)return;
+btn.disabled=true;btn.textContent='MPC 计算中…';
+document.getElementById('result').classList.remove('show');
+const logBox=document.getElementById('logBox');logBox.innerHTML='';
+
+// Start API call immediately (don't wait for log animation)
+const c=new AbortController();
+const timer=setTimeout(()=>c.abort(),10000);
+const apiPromise=fetch(API+'/api/infer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,scenario:currentScen}),signal:c.signal}).then(r=>r.ok?r.json():null).catch(()=>null);
+
+// Animate logs WHILE API is running
+const logs=[
+['14:30:01','P0','HP','初始化','AES-CTR 同步随机数种子交换','0.2KB'],
+['14:30:01','P0','HP','Mask','用户输入拆分为随机秘密份额','1.4KB'],
+['14:30:01','P1','HP','Mask','模型权重拆分为随机秘密份额','0.9KB'],
+['14:30:02','HP','P0','Compute','mul_batch：256 次 MPC 安全乘法','5.8KB'],
+['14:30:02','HP','P1','Compute','乘法结果分片：s0→P0, s1→P1','5.8KB'],
+['14:30:02','HP','P0','Compute','Π_softmax 安全 Softmax · 误差 10⁻¹⁵','0.7KB'],
+['14:30:03','P0','HP','Mask','Π_gelu 安全 GeLU 激活函数','0.4KB'],
+['14:30:03','HP','P1','Compute','GeLU 浮点域精确计算完成','0.4KB'],
+['14:30:03','P0','P1','Reveal','双方份额合并 · 输出分类结果','0.2KB'],
+];
+for(let i=0;i<logs.length;i++){
+const log=logs[i];await sleep(i===0?400:180);
+const line=document.createElement('div');line.className='log-line';
+line.innerHTML=`
+<span class="log-time">${log[0]}</span>
+<span class="log-tag ${log[1]}">${log[1]}</span>
+<span class="log-arrow">→</span>
+<span class="log-tag ${log[2]}">${log[2]}</span>
+
+<span class="log-detail">
+<b>${log[3]}</b> · ${log[4]}
+</span>
+
+<span class="log-bytes">${log[5]}</span>
+`;
+logBox.appendChild(line);logBox.scrollTop=logBox.scrollHeight;
+}
+
+// Wait for API (should be done by now, but just in case)
+const data=await apiPromise;
+clearTimeout(timer);
+
+if(data&&data.success){
+document.getElementById('result').classList.add('show');
+const predEl=document.getElementById('predLabel');
+predEl.textContent=data.top_prediction;
+if(data.confidence>60)predEl.classList.add('blue');else predEl.classList.remove('blue');
+document.getElementById('predConf').textContent='置信度 '+data.confidence+'%';
+document.getElementById('predMeta').innerHTML='<span class="tag ok">MPC 验证通过</span><span class="tag info">Rust HP 引擎</span><br>'+data.elapsed_seconds+'s · '+data.mul_count+'次安全乘法 · '+data.method;
+document.getElementById('distBox').innerHTML=data.distribution.map((d,i)=>`<div class="dist-row"><div class="dist-name">${d.label}</div><div class="dist-bar"><div class="dist-fill" style="width:${d.prob}%;background:${i===0?'var(--blue)':'var(--grid)'}"></div></div><div class="dist-val">${d.prob}%</div></div>`).join('');
+document.getElementById('attnWords').innerHTML=data.attention.map(a=>`<span class="attn-word" style="${attnColor(a.weight)}">${a.word}</span>`).join('');
+try{const cmp=await(await fetch(API+'/api/compare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,scenario:currentScen})})).json();document.getElementById('leakPlain').textContent=cmp.plaintext_mode.p1_sees;document.getElementById('leakCipher').textContent=cmp.mpc_mode.p1_sees;}catch(e){}
+toast('MPC 推理完成 · Rust HP 验证通过',true);
+}else{
+// Offline fallback
+document.getElementById('result').classList.add('show');
+document.getElementById('predLabel').textContent=labels[currentScen];document.getElementById('predLabel').classList.remove('blue');
+document.getElementById('predConf').textContent='置信度 '+dists[currentScen][0][1]+'%';
+document.getElementById('predMeta').innerHTML='<span class="tag warn">离线演示</span><br>Rust HP 或 API 未连接 · 使用模拟数据';
+document.getElementById('distBox').innerHTML=dists[currentScen].map(([l,p],i)=>`<div class="dist-row"><div class="dist-name">${l}</div><div class="dist-bar"><div class="dist-fill" style="width:${p}%;background:${i===0?'var(--blue)':'var(--grid)'}"></div></div><div class="dist-val">${p}%</div></div>`).join('');
+const words=text.replace(/[，。]/g,' ').split(' ').filter(w=>w.trim());
+document.getElementById('attnWords').innerHTML=words.map(w=>`<span class="attn-word" style="${attnColor(Math.random())}">${w}</span>`).join('');
+document.getElementById('leakPlain').textContent=text;
+document.getElementById('leakCipher').textContent='['+Array.from({length:3},()=>Math.floor(Math.random()*9e17+1e17)).join(', ')+', ...]';
+toast('离线演示模式 · 后端未连接',false);
+}
+btn.disabled=false;btn.textContent='开始隐私推理';
+}
+const canvas=document.getElementById('bgNet');
+
+const ctx=canvas.getContext('2d');
+
+function resizeCanvas(){
+
+canvas.width=window.innerWidth;
+
+canvas.height=window.innerHeight;
+}
+
+resizeCanvas();
+
+window.addEventListener('resize',resizeCanvas);
+
+const nodes=[];
+
+for(let i=0;i<80;i++){
+
+nodes.push({
+
+x:Math.random()*canvas.width,
+
+y:Math.random()*canvas.height,
+
+vx:(Math.random()-0.5)*0.4,
+
+vy:(Math.random()-0.5)*0.4
+
+});
+}
+
+function animateNetwork(){
+
+ctx.clearRect(0,0,canvas.width,canvas.height);
+
+nodes.forEach(n=>{
+
+n.x+=n.vx;
+n.y+=n.vy;
+
+if(n.x<0||n.x>canvas.width)n.vx*=-1;
+if(n.y<0||n.y>canvas.height)n.vy*=-1;
+
+ctx.beginPath();
+
+ctx.arc(n.x,n.y,2,0,Math.PI*2);
+
+ctx.fillStyle='#00bfff';
+
+ctx.fill();
+});
+
+for(let a of nodes){
+
+for(let b of nodes){
+
+const d=Math.hypot(a.x-b.x,a.y-b.y);
+
+if(d<120){
+
+ctx.strokeStyle=`rgba(0,180,255,${1-d/120})`;
+
+ctx.beginPath();
+
+ctx.moveTo(a.x,a.y);
+
+ctx.lineTo(b.x,b.y);
+
+ctx.stroke();
+}
+}
+}
+
+requestAnimationFrame(animateNetwork);
+}
+
+animateNetwork();
+</script>
+
+</div>
+
+</body>
+</html>

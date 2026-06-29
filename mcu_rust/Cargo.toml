@@ -18,6 +18,13 @@ numpy = "0.22"
 aes = "0.8"
 rayon = "1"
 
+[features]
+default = []
+cuda = []
+
+[build-dependencies]
+cc = "1"
+
 [dev-dependencies]
 criterion = "0.5"
 

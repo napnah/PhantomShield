@@ -28,6 +28,24 @@ elif [[ "${kind}" == "nonlinear" ]]; then
   if [[ "${op}" == "softmax" ]]; then
     shape_args+=(--k "${MCU_K:-4}")
   fi
+elif [[ "${kind}" == "bert_session" ]]; then
+  exe="/workspace/mcu_rust/target/release/bert_session"
+  shape_args=(
+    --batch "${MCU_BATCH:-1}"
+    --seq "${MCU_SEQ:-16}"
+    --hidden "${MCU_HIDDEN:-768}"
+    --heads "${MCU_HEADS:-12}"
+    --ffn "${MCU_FFN:-3072}"
+    --layers "${MCU_LAYERS:-12}"
+    --state-mode "${MCU_STATE_MODE:-synthetic}"
+    --input-mode "${MCU_INPUT_MODE:-synthetic}"
+    --scale-bits "${MCU_SCALE_BITS:-16}"
+    --rescale-bits "${MCU_RESCALE_BITS:-0}"
+    --rescale-mode "${MCU_RESCALE_MODE:-local}"
+  )
+  if [[ "${role}" == "p0" || "${role}" == "p1" ]]; then
+    shape_args+=(--share-dir "${MCU_SHARE_DIR:-/workspace/bert_shares/${role}}")
+  fi
 else
   echo "unsupported MCU_KIND: ${kind}" >&2
   exit 2
@@ -44,6 +62,11 @@ case "${role}" in
     exec "${exe}" p1 --addr "mcu-hp:${port}" "${shape_args[@]}" --out "${out_dir}/p1.out"
     ;;
   verify)
+    if [[ "${kind}" == "bert_session" ]]; then
+      test -s "${out_dir}/p0.out" && test -s "${out_dir}/p1.out"
+      echo "[verify] bert_session outputs exist"
+      exit 0
+    fi
     exec "${exe}" verify "${shape_args[@]}" --p0 "${out_dir}/p0.out" --p1 "${out_dir}/p1.out"
     ;;
   *)

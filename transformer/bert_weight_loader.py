@@ -29,8 +29,11 @@ def extract_layer_weights(model: BertForSequenceClassification, layer_idx: int) 
     ln2 = layer.output.LayerNorm
     return {
         "Wq": _t(layer.attention.self.query.weight),
+        "b_q": layer.attention.self.query.bias.detach().float().clone(),
         "Wk": _t(layer.attention.self.key.weight),
+        "b_k": layer.attention.self.key.bias.detach().float().clone(),
         "Wv": _t(layer.attention.self.value.weight),
+        "b_v": layer.attention.self.value.bias.detach().float().clone(),
         "Wo": _t(layer.attention.output.dense.weight),
         "b_o": layer.attention.output.dense.bias.detach().float().clone(),
         "W1": _t(layer.intermediate.dense.weight),

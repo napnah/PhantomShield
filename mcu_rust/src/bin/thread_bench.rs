@@ -7,8 +7,8 @@ use mcu_rust::channel::{make_mock, HpEndpoint, PartyEndpoint};
 use mcu_rust::prg::PrgSync;
 use mcu_rust::protocols::GELU_COEF;
 use mcu_rust::real_protocols::{
-    hp_exp, hp_gelu, hp_sigmoid, hp_softmax, party_exp, party_gelu, party_sigmoid,
-    party_softmax_all,
+    hp_exp_batch, hp_gelu_batch, hp_sigmoid_batch, hp_softmax_batch, party_exp_batch,
+    party_gelu_batch, party_sigmoid_batch, party_softmax_batch,
 };
 use mcu_rust::ring::{add, mul, sub};
 use mcu_rust::tensor::{hp_elemul, hp_matmul, party_elemul, party_matmul};
@@ -234,31 +234,28 @@ fn party_nonlinear(op: Op, n: usize, k: usize, id: u8, comm: PartyEndpoint) -> N
     let mut prg0 = PrgSync::new(&SHARED_SEED);
     match op {
         Op::Exp | Op::Sigmoid | Op::Gelu => {
-            let mut out = Vec::with_capacity(n);
-            for i in 0..n {
-                let x = value(i, op);
-                let share = share_value(x, i, id);
-                let y = match op {
-                    Op::Exp => party_exp(id, share, &mut prg0, &comm),
-                    Op::Sigmoid => party_sigmoid(id, share, &mut prg0, &comm),
-                    Op::Gelu => party_gelu(id, share, &mut prg0, &comm),
-                    _ => unreachable!(),
-                };
-                out.push(y);
-            }
+            let shares: Vec<f64> = (0..n)
+                .map(|i| share_value(value(i, op), i, id))
+                .collect();
+            let out = match op {
+                Op::Exp => party_exp_batch(id, &shares, &mut prg0, &comm),
+                Op::Sigmoid => party_sigmoid_batch(id, &shares, &mut prg0, &comm),
+                Op::Gelu => party_gelu_batch(id, &shares, &mut prg0, &comm),
+                _ => unreachable!(),
+            };
             NonlinearOut::Reals(out)
         }
         Op::Softmax => {
-            let mut out = Vec::with_capacity(n);
-            for i in 0..n {
-                let xs = vector_value(i, k);
-                let shares: Vec<f64> = xs
-                    .iter()
-                    .enumerate()
-                    .map(|(j, &v)| share_value(v, i * k + j, id))
-                    .collect();
-                out.push(party_softmax_all(id, &shares, &mut prg0, &comm));
-            }
+            let shares: Vec<Vec<f64>> = (0..n)
+                .map(|i| {
+                    let xs = vector_value(i, k);
+                    xs.iter()
+                        .enumerate()
+                        .map(|(j, &v)| share_value(v, i * k + j, id))
+                        .collect()
+                })
+                .collect();
+            let out = party_softmax_batch(id, &shares, &mut prg0, &comm);
             NonlinearOut::Rows(out)
         }
         _ => unreachable!(),
@@ -267,14 +264,12 @@ fn party_nonlinear(op: Op, n: usize, k: usize, id: u8, comm: PartyEndpoint) -> N
 
 fn hp_nonlinear(op: Op, n: usize, k: usize, comm: HpEndpoint) {
     let mut asprg = PrgSync::new(&HP_P0_SEED);
-    for _ in 0..n {
-        match op {
-            Op::Exp => hp_exp(&mut asprg, &comm),
-            Op::Sigmoid => hp_sigmoid(&mut asprg, &comm),
-            Op::Softmax => hp_softmax(k, &mut asprg, &comm),
-            Op::Gelu => hp_gelu(&mut asprg, &comm),
-            _ => unreachable!(),
-        }
+    match op {
+        Op::Exp => hp_exp_batch(n, &mut asprg, &comm),
+        Op::Sigmoid => hp_sigmoid_batch(n, &mut asprg, &comm),
+        Op::Softmax => hp_softmax_batch(n, k, &mut asprg, &comm),
+        Op::Gelu => hp_gelu_batch(n, &mut asprg, &comm),
+        _ => unreachable!(),
     }
 }
 

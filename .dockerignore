@@ -8,6 +8,14 @@ experiments/docker_runs
 experiments/*_docker_real_comm
 results
 checkpoints
+!checkpoints/
+checkpoints/*
+!checkpoints/bert-sst2/
+!checkpoints/bert-sst2/config.json
+!checkpoints/bert-sst2/model.safetensors
+!checkpoints/bert-sst2/special_tokens_map.json
+!checkpoints/bert-sst2/tokenizer_config.json
+!checkpoints/bert-sst2/vocab.txt
 bert-base-uncased
 *.zip
 __pycache__

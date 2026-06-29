@@ -8,7 +8,9 @@ use mcu_rust::channel::{
 };
 use mcu_rust::prg::PrgSync;
 use mcu_rust::ring::{add, mul, sub};
-use mcu_rust::tensor::{hp_elemul, hp_matmul, party_elemul, party_matmul};
+use mcu_rust::tensor::{
+    hp_elemul, hp_matmul, party_elemul, party_matmul, reset_tensor_stats, tensor_stats_snapshot,
+};
 
 const SHARED_SEED: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 const HP_P0_SEED: [u8; 16] = [
@@ -111,6 +113,7 @@ fn run_hp(args: &[String]) -> std::io::Result<()> {
     println!("[HP] p0 and p1 connected");
     let mut asprg = PrgSync::new(&HP_P0_SEED);
     reset_socket_stats();
+    reset_tensor_stats();
     let start = Instant::now();
     let mul_count = match op {
         Op::Elemul => {
@@ -145,6 +148,7 @@ fn run_party(args: &[String], id: u8) -> std::io::Result<()> {
     let comm = SocketPartyEndpoint::connect(&addr, id)?;
     let mut prg = PrgSync::new(&SHARED_SEED);
     reset_socket_stats();
+    reset_tensor_stats();
     let setup_start = Instant::now();
     let (out, mul_count) = match op {
         Op::Elemul => {
@@ -169,15 +173,14 @@ fn run_party(args: &[String], id: u8) -> std::io::Result<()> {
     let write_start = Instant::now();
     write_vec(&out_path, &out)?;
     let write_elapsed = write_start.elapsed().as_secs_f64();
-    let elapsed = protocol_elapsed + write_elapsed;
     println!(
         "[P{id}] done: {:.6}s, {:.0} secure mul/s, wrote {} values to {}",
-        elapsed,
-        mul_count as f64 / elapsed,
+        protocol_elapsed,
+        mul_count as f64 / protocol_elapsed,
         out.len(),
         out_path
     );
-    print_timing(&format!("p{id}"), elapsed);
+    print_timing(&format!("p{id}"), protocol_elapsed);
     println!(
         "[P{id}] timing_breakdown protocol_s={protocol_elapsed:.9} write_s={write_elapsed:.9}"
     );
@@ -186,16 +189,27 @@ fn run_party(args: &[String], id: u8) -> std::io::Result<()> {
 
 fn print_timing(role: &str, total_s: f64) {
     let stats = socket_stats_snapshot();
+    let tensor_stats = tensor_stats_snapshot();
     let send_s = stats.send_nanos as f64 / 1e9;
     let recv_s = stats.recv_nanos as f64 / 1e9;
+    let recv_wait_s = stats.recv_wait_nanos as f64 / 1e9;
+    let recv_read_s = stats.recv_read_nanos as f64 / 1e9;
     let comm_s = send_s + recv_s;
+    let compute_s = tensor_stats.local_nanos as f64 / 1e9;
+    let other_local_s = (total_s - comm_s - compute_s).max(0.0);
     let local_s = (total_s - comm_s).max(0.0);
     println!(
-        "[{role}] timing total_s={total_s:.9} comm_s={comm_s:.9} local_s={local_s:.9} send_s={send_s:.9} recv_s={recv_s:.9} send_msgs={} recv_msgs={} send_bytes={} recv_bytes={}",
+        "[{role}] timing total_s={total_s:.9} comm_s={comm_s:.9} local_s={local_s:.9} compute_s={compute_s:.9} other_local_s={other_local_s:.9} send_s={send_s:.9} recv_s={recv_s:.9} recv_wait_s={recv_wait_s:.9} recv_read_s={recv_read_s:.9} send_msgs={} recv_msgs={} send_bytes={} recv_bytes={} matmul_calls={} cpu_matmul_calls={} cuda_matmul_calls={} fused_party_calls={} fused_hp_calls={} cuda_fallbacks={}",
         stats.send_messages,
         stats.recv_messages,
         stats.send_bytes,
-        stats.recv_bytes
+        stats.recv_bytes,
+        tensor_stats.matmul_calls,
+        tensor_stats.cpu_matmul_calls,
+        tensor_stats.cuda_matmul_calls,
+        tensor_stats.fused_party_calls,
+        tensor_stats.fused_hp_calls,
+        tensor_stats.cuda_fallbacks,
     );
 }
 

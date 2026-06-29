@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 
 
 SEQ = 4
@@ -14,16 +15,129 @@ HIDDEN = 16
 HEADS = 4
 HEAD_DIM = HIDDEN // HEADS
 FFN = 32
+LABELS = ["negative", "positive"]
+
+
+DEFAULT_BERT_SAMPLES = [
+    {"text": "This movie is wonderful and heartwarming.", "label": 1},
+    {"text": "A complete waste of time, absolutely terrible.", "label": 0},
+]
 
 
 def env_int(name: str, default: int) -> int:
     return int(os.environ.get(name, str(default)))
 
 
+def load_bert_samples() -> list[dict]:
+    path = os.environ.get("CRYPTEN_INPUT_JSON")
+    if not path:
+        return DEFAULT_BERT_SAMPLES
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(data, dict):
+        data = data.get("samples", [])
+    if not isinstance(data, list) or not data:
+        raise ValueError(f"no BERT samples found in {path}")
+    out = []
+    for item in data:
+        if isinstance(item, str):
+            out.append({"text": item, "label": None})
+        else:
+            out.append({"text": str(item["text"]), "label": item.get("label")})
+    return out
+
+
+def crypten_security_profile(op: str) -> dict:
+    if op != "bert_full":
+        return {"mode": "crypten_2pc", "notes": ["Synthetic operator benchmark."]}
+    nonlinear = os.environ.get("CRYPTEN_BERT_NONLINEAR", "native").strip().lower()
+    return {
+        "mode": "crypten_docker_2pc_bert_full_engineering_baseline",
+        "nonlinear": nonlinear,
+        "secure_components": [
+            "linear projections, attention score/value matmul, FFN matmul, classifier matmul through CrypTen tensors",
+            "attention softmax and classifier softmax through CrypTen tensors when CRYPTEN_BERT_NONLINEAR=native",
+            "sigmoid-GELU approximation through CrypTen tensors when CRYPTEN_BERT_NONLINEAR=native",
+        ],
+        "plaintext_components": [
+            "tokenization and embedding lookup",
+            "legacy_two_quad mode reconstructs scores before two_quad",
+            "LayerNorm variance inverse currently reconstructs variance",
+            "attention context and pooler output are reconstructed before later steps",
+            "both Docker ranks load the same local model checkpoint in this baseline",
+        ],
+        "status": "full BERT Docker execution path, not a final threat-model-complete secure inference.",
+    }
+
+
+def load_bert_model_and_tokenizer():
+    from transformers import BertForSequenceClassification, BertTokenizer
+
+    root = Path("/workspace")
+    ckpt = root / "checkpoints" / "bert-sst2"
+    model_dir = root / "bert-base-uncased"
+    path = ckpt if (ckpt / "config.json").is_file() else model_dir
+    tokenizer = BertTokenizer.from_pretrained(str(path))
+    model = BertForSequenceClassification.from_pretrained(str(path), num_labels=2).eval()
+    return model, tokenizer
+
+
+def run_bert_full_once(model, tokenizer, samples: list[dict]) -> dict:
+    from transformer.mcu_bert_crypten_full import classify_crypten_full
+    from transformer.plaintext_bert import classify_plaintext_hf
+
+    max_seq_len = env_int("CRYPTEN_MAX_SEQ_LEN", 16)
+    max_layers = env_int("CRYPTEN_MAX_LAYERS", 12)
+    predictions = []
+    sample_times = []
+    plain_times = []
+    with torch.no_grad():
+        for idx, sample in enumerate(samples):
+            text = sample["text"]
+            t0 = time.perf_counter()
+            label, probs, conf = classify_crypten_full(
+                model, tokenizer, text, "cpu", max_seq_len=max_seq_len, max_layers=max_layers
+            )
+            elapsed = time.perf_counter() - t0
+            sample_times.append(elapsed)
+
+            pt0 = time.perf_counter()
+            plain_label, plain_probs = classify_plaintext_hf(model, tokenizer, text, "cpu", max_seq_len)
+            plain_elapsed = time.perf_counter() - pt0
+            plain_times.append(plain_elapsed)
+
+            pred = LABELS.index(label)
+            plain_pred = LABELS.index(plain_label)
+            predictions.append(
+                {
+                    "sample_id": idx,
+                    "text": text,
+                    "gold_label": sample.get("label"),
+                    "prediction": pred,
+                    "label": label,
+                    "probabilities": [float(x) for x in probs],
+                    "confidence": float(conf),
+                    "plain_prediction": plain_pred,
+                    "plain_label": plain_label,
+                    "plain_probabilities": [float(x) for x in plain_probs],
+                    "latency_s": elapsed,
+                    "plain_latency_s": plain_elapsed,
+                }
+            )
+    return {
+        "sample_times_s": sample_times,
+        "plain_sample_times_s": plain_times,
+        "predictions": predictions,
+        "sum_last": float(sum(sum(p["probabilities"]) for p in predictions)),
+    }
+
+
 def run_op(op: str):
     import crypten
 
     torch.manual_seed(2026)
+    if op == "bert_full":
+        model, tokenizer = load_bert_model_and_tokenizer()
+        return run_bert_full_once(model, tokenizer, load_bert_samples())
     if op == "elemul":
         length = env_int("CRYPTEN_LEN", 64)
         x = crypten.cryptensor(torch.randn(length))
@@ -80,6 +194,18 @@ def run_op(op: str):
 
 def run_plain_op(op: str):
     torch.manual_seed(2026)
+    if op == "bert_full":
+        model, tokenizer = load_bert_model_and_tokenizer()
+        samples = load_bert_samples()
+        from transformer.plaintext_bert import classify_plaintext_hf
+
+        out = []
+        for sample in samples:
+            label, probs = classify_plaintext_hf(
+                model, tokenizer, sample["text"], "cpu", env_int("CRYPTEN_MAX_SEQ_LEN", 16)
+            )
+            out.append(sum(probs) + LABELS.index(label))
+        return torch.tensor(out)
     if op == "elemul":
         length = env_int("CRYPTEN_LEN", 64)
         x = torch.randn(length)
@@ -162,16 +288,23 @@ def main() -> int:
     crypten.init()
     plain_times = []
     plain_sums = []
-    if rank == 0:
+    if rank == 0 and op != "bert_full":
         plain_times, plain_sums = time_plain(op, repeat)
     run_op(op)
     times = []
     sums = []
+    bert_runs = []
+    bert_plain_times = []
     for _ in range(repeat):
         t0 = time.perf_counter()
         out = run_op(op)
         times.append(time.perf_counter() - t0)
-        sums.append(float(out.sum()))
+        if op == "bert_full":
+            bert_runs.append(out)
+            sums.append(float(out["sum_last"]))
+            bert_plain_times.extend(out["plain_sample_times_s"])
+        else:
+            sums.append(float(out.sum()))
     crypten.uninit()
 
     payload = {
@@ -187,7 +320,21 @@ def main() -> int:
         "plain_sum_last": plain_sums[-1] if plain_sums else None,
         "rendezvous": os.environ.get("RENDEZVOUS", ""),
         "backend": os.environ.get("DISTRIBUTED_BACKEND", ""),
+        "security_profile": crypten_security_profile(op),
     }
+    if op == "bert_full":
+        last = bert_runs[-1] if bert_runs else {}
+        payload.update(
+            {
+                "max_seq_len": env_int("CRYPTEN_MAX_SEQ_LEN", 16),
+                "max_layers": env_int("CRYPTEN_MAX_LAYERS", 12),
+                "n_samples": len(last.get("predictions", [])),
+                "predictions": last.get("predictions", []),
+                "sample_times_s": last.get("sample_times_s", []),
+                "plain_sample_times_s": last.get("plain_sample_times_s", []),
+                "plain_median_s": statistics.median(bert_plain_times) if bert_plain_times else None,
+            }
+        )
     (out_dir / f"rank{rank}.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"[crypten-rank{rank}] done: {payload['median_s']:.9f}s op={op}")
     return 0

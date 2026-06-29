@@ -1,9 +1,9 @@
----
-description: PhantomShield 项目开发约束与环境约定
+﻿---
+description: AegisX 项目开发约束与环境约定
 alwaysApply: true
 ---
 
-# PhantomShield 开发约束
+# AegisX 开发约束
 
 ## 环境
 

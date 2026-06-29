@@ -1,0 +1,32 @@
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
+
+WORKDIR /workspace
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        build-essential \
+        pkg-config \
+        python3.11-dev \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PYO3_PYTHON=/usr/bin/python3.11 \
+    PATH=/usr/local/cargo/bin:${PATH}
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --profile minimal --default-toolchain 1.82.0
+
+COPY mcu_rust /workspace/mcu_rust
+COPY docker/mcu_entrypoint.sh /usr/local/bin/mcu_entrypoint.sh
+
+RUN chmod +x /usr/local/bin/mcu_entrypoint.sh \
+    && cd /workspace/mcu_rust \
+    && cargo build --release --features cuda --bin real_tensor --bin real_nonlinear
+
+WORKDIR /workspace/mcu_rust
+
+ENTRYPOINT ["/usr/local/bin/mcu_entrypoint.sh"]

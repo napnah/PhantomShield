@@ -27,7 +27,10 @@ from transformers import BertForSequenceClassification, BertTokenizer
 
 def _ensure_crypten():
     import crypten
+    import crypten.communicator as comm
 
+    if comm.is_initialized():
+        return crypten
     patch_crypten_inprocess()
     crypten.init_thread(0, 1)
     return crypten
@@ -36,6 +39,10 @@ def _ensure_crypten():
 def _enc(x: torch.Tensor):
     crypten = _ensure_crypten()
     return crypten.cryptensor(x)
+
+
+def _bert_nonlinear_mode() -> str:
+    return os.environ.get("CRYPTEN_BERT_NONLINEAR", "native").strip().lower()
 
 
 def _layernorm_crypten(x_enc, gamma, beta, eps=1e-5):
@@ -53,20 +60,24 @@ def _attention_crypten(x_enc, weights, num_heads, attn_mask_ext):
     scale = head_dim ** 0.5
 
     wq, wk, wv, wo = weights["Wq"], weights["Wk"], weights["Wv"], weights["Wo"]
+    bq, bk, bv = weights["b_q"], weights["b_k"], weights["b_v"]
     bo = weights["b_o"]
 
-    q = x_enc.matmul(wq).view(b, s, num_heads, head_dim).transpose(1, 2)
-    k = x_enc.matmul(wk).view(b, s, num_heads, head_dim).transpose(1, 2)
-    v = x_enc.matmul(wv).view(b, s, num_heads, head_dim).transpose(1, 2)
+    q = (x_enc.matmul(wq) + bq).view(b, s, num_heads, head_dim).transpose(1, 2)
+    k = (x_enc.matmul(wk) + bk).view(b, s, num_heads, head_dim).transpose(1, 2)
+    v = (x_enc.matmul(wv) + bv).view(b, s, num_heads, head_dim).transpose(1, 2)
 
     scores = q.matmul(k.transpose(2, 3)) / scale
     if attn_mask_ext is not None:
         scores = scores + attn_mask_ext
 
     # 2Quad 在明文 scores 上计算后加密（CrypTen 张量上二次运算等价）
-    scores_plain = scores.get_plain_text()
-    probs_plain = two_quad(scores_plain)
-    probs = _enc(probs_plain)
+    if _bert_nonlinear_mode() == "legacy_two_quad":
+        scores_plain = scores.get_plain_text()
+        probs_plain = two_quad(scores_plain)
+        probs = _enc(probs_plain)
+    else:
+        probs = scores.softmax(dim=-1)
 
     ctx = probs.matmul(v)
     ctx_plain = ctx.get_plain_text().transpose(1, 2).reshape(b, s, h)
@@ -75,9 +86,12 @@ def _attention_crypten(x_enc, weights, num_heads, attn_mask_ext):
 
 def _ffn_crypten(x_enc, weights):
     h = x_enc.matmul(weights["W1"]) + weights["b1"]
-    h_plain = h.get_plain_text()
-    h_act = quad_activation(h_plain)
-    h = _enc(h_act)
+    if _bert_nonlinear_mode() == "legacy_two_quad":
+        h_plain = h.get_plain_text()
+        h_act = quad_activation(h_plain)
+        h = _enc(h_act)
+    else:
+        h = h * (h * 1.702).sigmoid()
     return h.matmul(weights["W2"]) + weights["b2"]
 
 
@@ -126,8 +140,11 @@ def classify_crypten_full(
     w, b = extract_classifier_weights(model)
     cls_enc = crypten.cryptensor(cls.cpu())
     logits_enc = cls_enc.matmul(crypten.cryptensor(w.cpu())) + crypten.cryptensor(b.cpu())
-    logits_plain = logits_enc.get_plain_text()
-    probs = two_quad(logits_plain)[0]
+    if _bert_nonlinear_mode() == "legacy_two_quad":
+        logits_plain = logits_enc.get_plain_text()
+        probs = two_quad(logits_plain)[0]
+    else:
+        probs = logits_enc.softmax(dim=-1).get_plain_text()[0]
     labels = ["negative", "positive"]
     pred = int(probs.argmax())
     return labels[pred], probs.tolist(), float(probs.max())

@@ -1,4 +1,4 @@
-# PhantomShield / MCU-Transformer 依赖
+﻿# AegisX / MCU-Transformer 依赖
 # 推荐：conda base (Python 3.10+) + pip install --user -r requirements.txt
 
 torch>=2.5.0

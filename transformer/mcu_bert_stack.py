@@ -35,9 +35,9 @@ def attention_forward(
     head_dim = h // num_heads
     scale = head_dim ** 0.5
 
-    q = (x @ weights["Wq"]).view(b, s, num_heads, head_dim).transpose(1, 2)
-    k = (x @ weights["Wk"]).view(b, s, num_heads, head_dim).transpose(1, 2)
-    v = (x @ weights["Wv"]).view(b, s, num_heads, head_dim).transpose(1, 2)
+    q = (x @ weights["Wq"] + weights["b_q"]).view(b, s, num_heads, head_dim).transpose(1, 2)
+    k = (x @ weights["Wk"] + weights["b_k"]).view(b, s, num_heads, head_dim).transpose(1, 2)
+    v = (x @ weights["Wv"] + weights["b_v"]).view(b, s, num_heads, head_dim).transpose(1, 2)
 
     scores = (q @ k.transpose(-2, -1)) / scale
     if attn_mask_ext is not None:

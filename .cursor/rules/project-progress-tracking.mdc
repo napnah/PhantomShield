@@ -1,0 +1,25 @@
+﻿---
+description: Project progress tracking workflow for AegisX
+alwaysApply: true
+---
+
+# AegisX Project Progress Rule
+
+Before starting any task in this repository:
+
+- Read the relevant section of `docs/20260628_project_progress_tracking.md`.
+- Identify which project goal, subgoal, checklist item, or risk the task belongs to.
+- Use the current progress document as the source of truth before changing code, experiments, docs, or architecture.
+
+After finishing any task in this repository:
+
+- Update `docs/20260628_project_progress_tracking.md` with a concise record of:
+  - what was completed;
+  - what was not completed because of errors, constraints, missing dependencies, measurement limits, or design limits;
+  - whether continuing in this direction is still promising, and the next useful step.
+- Remove or rewrite outdated, contradictory, or no-longer-accurate progress content.
+- Keep the progress document compact. Prefer replacing stale details with the latest conclusion instead of appending long historical notes.
+- If an experiment was run, record only the important result and the experiment output path.
+- If a goal is blocked or no longer useful, mark it clearly rather than leaving it as an open TODO.
+
+The progress document should stay short, current, and decision-oriented. It is not a raw log.

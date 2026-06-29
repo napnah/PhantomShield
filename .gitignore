@@ -29,6 +29,14 @@ mcu_rust/target/
 results/
 experiments/*_docker_real_comm/shared/
 experiments/*_docker_real_comm/logs/
+experiments/**/__pycache__/
+experiments/**/*_shares/
+experiments/**/*_bert_session_shares/
+experiments/**/*_bert_shares/
+experiments/**/bert_shares/
+experiments/**/bert_shares_bind/
+experiments/**/shared/
+experiments/**/*.log
 
 # CrypTen 源码（第三方，非本项目）
 crypten_src/
@@ -52,3 +60,6 @@ mcu_core.zip
 *.log
 verify_out.txt
 inspect_*.txt
+
+# Project-local large runtime caches and Docker Desktop data.
+.local/

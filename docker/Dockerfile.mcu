@@ -11,7 +11,7 @@ COPY docker/mcu_entrypoint.sh /usr/local/bin/mcu_entrypoint.sh
 
 RUN chmod +x /usr/local/bin/mcu_entrypoint.sh \
     && cd /workspace/mcu_rust \
-    && cargo build --release --bin real_tensor --bin real_nonlinear
+    && cargo build --release --bin real_tensor --bin real_nonlinear --bin bert_session
 
 WORKDIR /workspace/mcu_rust
 

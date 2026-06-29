@@ -1,6 +1,6 @@
-# PhantomShield 开发日志（DEVLOG）
+﻿# AegisX 开发日志（DEVLOG）
 
-> 本文档记录 PhantomShield（MCU-Transformer）系统的开发历程，按时间顺序整理各阶段完成的工作。
+> 本文档记录 AegisX（MCU-Transformer）系统的开发历程，按时间顺序整理各阶段完成的工作。
 > 作者负责模块：底层通信框架、密文推理集成、实验验证、Web Dashboard、系统统筹。
 
 ---
@@ -163,7 +163,7 @@
   - 真 Π_softmax 计算 Attention：最大误差 3.66e-15，概率和精确为 1
   - 真 Π_gelu 计算 FFN：最大误差 3.69e-12
 
-**意义**：至此 PhantomShield 的非线性计算全部由自研 MCU 协议精确支撑，作品从"基于 CrypTen 搭建"升级为"基于 MCU 范式的原创实现"，创新性闭环完成。系统采用双轨设计：CrypTen 版用于流畅的现场演示，MCU 协议版用于证明协议真实性与精度。
+**意义**：至此 AegisX 的非线性计算全部由自研 MCU 协议精确支撑，作品从"基于 CrypTen 搭建"升级为"基于 MCU 范式的原创实现"，创新性闭环完成。系统采用双轨设计：CrypTen 版用于流畅的现场演示，MCU 协议版用于证明协议真实性与精度。
 
 ---
 

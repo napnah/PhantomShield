@@ -1,4 +1,4 @@
-# PhantomShield 环境配置（conda base，不新建 venv）
+﻿# AegisX 环境配置（conda base，不新建 venv）
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root

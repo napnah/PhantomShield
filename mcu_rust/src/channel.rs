@@ -6,6 +6,7 @@
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::slice;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::Instant;
@@ -25,10 +26,16 @@ pub enum Msg {
     ShareVec(Vec<u64>),
     /// Real-valued single payload.
     Real(f64),
+    /// Real-valued vector payload.
+    RealVec(Vec<f64>),
     /// Real-valued pair payload.
     RealPair(f64, f64),
+    /// Real-valued pair vector payload.
+    RealPairVec { a: Vec<f64>, b: Vec<f64> },
     /// Public bit broadcast.
     Bit(u8),
+    /// Public bit vector broadcast.
+    BitVec(Vec<u8>),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -39,6 +46,8 @@ pub struct SocketStats {
     pub recv_bytes: u64,
     pub send_nanos: u64,
     pub recv_nanos: u64,
+    pub recv_wait_nanos: u64,
+    pub recv_read_nanos: u64,
 }
 
 static SEND_MESSAGES: AtomicU64 = AtomicU64::new(0);
@@ -47,6 +56,8 @@ static SEND_BYTES: AtomicU64 = AtomicU64::new(0);
 static RECV_BYTES: AtomicU64 = AtomicU64::new(0);
 static SEND_NANOS: AtomicU64 = AtomicU64::new(0);
 static RECV_NANOS: AtomicU64 = AtomicU64::new(0);
+static RECV_WAIT_NANOS: AtomicU64 = AtomicU64::new(0);
+static RECV_READ_NANOS: AtomicU64 = AtomicU64::new(0);
 
 pub fn reset_socket_stats() {
     SEND_MESSAGES.store(0, Ordering::Relaxed);
@@ -55,6 +66,8 @@ pub fn reset_socket_stats() {
     RECV_BYTES.store(0, Ordering::Relaxed);
     SEND_NANOS.store(0, Ordering::Relaxed);
     RECV_NANOS.store(0, Ordering::Relaxed);
+    RECV_WAIT_NANOS.store(0, Ordering::Relaxed);
+    RECV_READ_NANOS.store(0, Ordering::Relaxed);
 }
 
 pub fn socket_stats_snapshot() -> SocketStats {
@@ -65,6 +78,8 @@ pub fn socket_stats_snapshot() -> SocketStats {
         recv_bytes: RECV_BYTES.load(Ordering::Relaxed),
         send_nanos: SEND_NANOS.load(Ordering::Relaxed),
         recv_nanos: RECV_NANOS.load(Ordering::Relaxed),
+        recv_wait_nanos: RECV_WAIT_NANOS.load(Ordering::Relaxed),
+        recv_read_nanos: RECV_READ_NANOS.load(Ordering::Relaxed),
     }
 }
 
@@ -105,16 +120,34 @@ impl Msg {
             _ => panic!("expected Real message"),
         }
     }
+    pub fn into_real_vec(self) -> Vec<f64> {
+        match self {
+            Msg::RealVec(values) => values,
+            _ => panic!("expected RealVec message"),
+        }
+    }
     pub fn as_real_pair(&self) -> (f64, f64) {
         match self {
             Msg::RealPair(a, b) => (*a, *b),
             _ => panic!("expected RealPair message"),
         }
     }
+    pub fn into_real_pair_vec(self) -> (Vec<f64>, Vec<f64>) {
+        match self {
+            Msg::RealPairVec { a, b } => (a, b),
+            _ => panic!("expected RealPairVec message"),
+        }
+    }
     pub fn as_bit(&self) -> u8 {
         match self {
             Msg::Bit(v) => *v,
             _ => panic!("expected Bit message"),
+        }
+    }
+    pub fn into_bit_vec(self) -> Vec<u8> {
+        match self {
+            Msg::BitVec(values) => values,
+            _ => panic!("expected BitVec message"),
         }
     }
 }
@@ -129,8 +162,15 @@ pub trait PartyComm {
 pub trait HpComm {
     fn recv_from_p0(&self) -> Msg;
     fn recv_from_p1(&self) -> Msg;
+    fn recv_from_parties(&self) -> (Msg, Msg) {
+        (self.recv_from_p0(), self.recv_from_p1())
+    }
     fn send_to_p0(&self, m: Msg);
     fn send_to_p1(&self, m: Msg);
+    fn send_to_parties(&self, p0: Msg, p1: Msg) {
+        self.send_to_p0(p0);
+        self.send_to_p1(p1);
+    }
 }
 
 pub struct PartyEndpoint {
@@ -201,26 +241,56 @@ const MSG_BIT: u8 = 5;
 const MSG_MATMUL_TO_HP: u8 = 6;
 const MSG_SHARE_VEC: u8 = 7;
 const MSG_MUL_VEC_TO_HP: u8 = 8;
+const MSG_REAL_VEC: u8 = 9;
+const MSG_REAL_PAIR_VEC: u8 = 10;
+const MSG_BIT_VEC: u8 = 11;
 
-fn write_u64_vec(buf: &mut Vec<u8>, values: &[u64]) {
-    buf.extend_from_slice(&(values.len() as u64).to_be_bytes());
-    for value in values {
-        buf.extend_from_slice(&value.to_be_bytes());
+fn u64_bytes(values: &[u64]) -> &[u8] {
+    unsafe { slice::from_raw_parts(values.as_ptr() as *const u8, std::mem::size_of_val(values)) }
+}
+
+fn f64_bytes(values: &[f64]) -> &[u8] {
+    unsafe { slice::from_raw_parts(values.as_ptr() as *const u8, std::mem::size_of_val(values)) }
+}
+
+fn write_slices(stream: &mut TcpStream, slices: &[&[u8]]) -> std::io::Result<()> {
+    for slice in slices {
+        stream.write_all(slice)?;
     }
+    Ok(())
 }
 
 fn read_u64_vec(stream: &mut TcpStream) -> std::io::Result<Vec<u64>> {
     let mut len_buf = [0u8; 8];
     stream.read_exact(&mut len_buf)?;
     let len = u64::from_be_bytes(len_buf) as usize;
-    let mut bytes = vec![0u8; len * 8];
-    stream.read_exact(&mut bytes)?;
-    let mut out = Vec::with_capacity(len);
-    for chunk in bytes.chunks_exact(8) {
-        let mut value = [0u8; 8];
-        value.copy_from_slice(chunk);
-        out.push(u64::from_be_bytes(value));
-    }
+    let mut out = vec![0u64; len];
+    let bytes = unsafe { slice::from_raw_parts_mut(out.as_mut_ptr() as *mut u8, len * 8) };
+    stream.read_exact(bytes)?;
+    Ok(out)
+}
+
+fn read_f64_vec(stream: &mut TcpStream) -> std::io::Result<Vec<f64>> {
+    let mut len_buf = [0u8; 8];
+    stream.read_exact(&mut len_buf)?;
+    let len = u64::from_be_bytes(len_buf) as usize;
+    let mut out = vec![0.0f64; len];
+    let bytes = unsafe { slice::from_raw_parts_mut(out.as_mut_ptr() as *mut u8, len * 8) };
+    stream.read_exact(bytes)?;
+    Ok(out)
+}
+
+fn write_u8_vec(buf: &mut Vec<u8>, values: &[u8]) {
+    buf.extend_from_slice(&(values.len() as u64).to_be_bytes());
+    buf.extend_from_slice(values);
+}
+
+fn read_u8_vec(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
+    let mut len_buf = [0u8; 8];
+    stream.read_exact(&mut len_buf)?;
+    let len = u64::from_be_bytes(len_buf) as usize;
+    let mut out = vec![0u8; len];
+    stream.read_exact(&mut out)?;
     Ok(out)
 }
 
@@ -235,20 +305,16 @@ fn write_msg(stream: &mut TcpStream, msg: &Msg) -> std::io::Result<()> {
             stream.write_all(&buf)
         }
         Msg::MatMulToHp { id, a, b } => {
-            let mut buf = Vec::with_capacity(18 + (a.len() + b.len()) * 8);
-            buf.push(MSG_MATMUL_TO_HP);
-            buf.push(*id);
-            write_u64_vec(&mut buf, a);
-            write_u64_vec(&mut buf, b);
-            stream.write_all(&buf)
+            let header = [MSG_MATMUL_TO_HP, *id];
+            let a_len = (a.len() as u64).to_be_bytes();
+            let b_len = (b.len() as u64).to_be_bytes();
+            write_slices(stream, &[&header, &a_len, u64_bytes(a), &b_len, u64_bytes(b)])
         }
         Msg::MulVecToHp { id, mx, my } => {
-            let mut buf = Vec::with_capacity(18 + (mx.len() + my.len()) * 8);
-            buf.push(MSG_MUL_VEC_TO_HP);
-            buf.push(*id);
-            write_u64_vec(&mut buf, mx);
-            write_u64_vec(&mut buf, my);
-            stream.write_all(&buf)
+            let header = [MSG_MUL_VEC_TO_HP, *id];
+            let mx_len = (mx.len() as u64).to_be_bytes();
+            let my_len = (my.len() as u64).to_be_bytes();
+            write_slices(stream, &[&header, &mx_len, u64_bytes(mx), &my_len, u64_bytes(my)])
         }
         Msg::Share(v) => {
             let mut buf = [0u8; 9];
@@ -257,16 +323,20 @@ fn write_msg(stream: &mut TcpStream, msg: &Msg) -> std::io::Result<()> {
             stream.write_all(&buf)
         }
         Msg::ShareVec(values) => {
-            let mut buf = Vec::with_capacity(9 + values.len() * 8);
-            buf.push(MSG_SHARE_VEC);
-            write_u64_vec(&mut buf, values);
-            stream.write_all(&buf)
+            let tag = [MSG_SHARE_VEC];
+            let len = (values.len() as u64).to_be_bytes();
+            write_slices(stream, &[&tag, &len, u64_bytes(values)])
         }
         Msg::Real(v) => {
             let mut buf = [0u8; 9];
             buf[0] = MSG_REAL;
             buf[1..9].copy_from_slice(&v.to_bits().to_be_bytes());
             stream.write_all(&buf)
+        }
+        Msg::RealVec(values) => {
+            let tag = [MSG_REAL_VEC];
+            let len = (values.len() as u64).to_be_bytes();
+            write_slices(stream, &[&tag, &len, f64_bytes(values)])
         }
         Msg::RealPair(a, b) => {
             let mut buf = [0u8; 17];
@@ -275,7 +345,19 @@ fn write_msg(stream: &mut TcpStream, msg: &Msg) -> std::io::Result<()> {
             buf[9..17].copy_from_slice(&b.to_bits().to_be_bytes());
             stream.write_all(&buf)
         }
+        Msg::RealPairVec { a, b } => {
+            let tag = [MSG_REAL_PAIR_VEC];
+            let a_len = (a.len() as u64).to_be_bytes();
+            let b_len = (b.len() as u64).to_be_bytes();
+            write_slices(stream, &[&tag, &a_len, f64_bytes(a), &b_len, f64_bytes(b)])
+        }
         Msg::Bit(v) => stream.write_all(&[MSG_BIT, *v]),
+        Msg::BitVec(values) => {
+            let mut buf = Vec::with_capacity(9 + values.len());
+            buf.push(MSG_BIT_VEC);
+            write_u8_vec(&mut buf, values);
+            stream.write_all(&buf)
+        }
     }
 }
 
@@ -287,8 +369,11 @@ fn msg_wire_len(msg: &Msg) -> u64 {
         Msg::Share(_) => 9,
         Msg::ShareVec(values) => 9 + (values.len() as u64) * 8,
         Msg::Real(_) => 9,
+        Msg::RealVec(values) => 9 + (values.len() as u64) * 8,
         Msg::RealPair(_, _) => 17,
+        Msg::RealPairVec { a, b } => 17 + ((a.len() + b.len()) as u64) * 8,
         Msg::Bit(_) => 2,
+        Msg::BitVec(values) => 9 + values.len() as u64,
     }
 }
 
@@ -298,16 +383,31 @@ fn record_send(elapsed_nanos: u64, bytes: u64) {
     SEND_NANOS.fetch_add(elapsed_nanos, Ordering::Relaxed);
 }
 
-fn record_recv(elapsed_nanos: u64, bytes: u64) {
-    RECV_MESSAGES.fetch_add(1, Ordering::Relaxed);
-    RECV_BYTES.fetch_add(bytes, Ordering::Relaxed);
-    RECV_NANOS.fetch_add(elapsed_nanos, Ordering::Relaxed);
+fn record_recv(elapsed_nanos: u64, wait_nanos: u64, read_nanos: u64, bytes: u64) {
+    record_recv_batch(1, elapsed_nanos, wait_nanos, read_nanos, bytes);
 }
 
-fn read_msg(stream: &mut TcpStream) -> std::io::Result<Msg> {
+fn record_recv_batch(
+    messages: u64,
+    elapsed_nanos: u64,
+    wait_nanos: u64,
+    read_nanos: u64,
+    bytes: u64,
+) {
+    RECV_MESSAGES.fetch_add(messages, Ordering::Relaxed);
+    RECV_BYTES.fetch_add(bytes, Ordering::Relaxed);
+    RECV_NANOS.fetch_add(elapsed_nanos, Ordering::Relaxed);
+    RECV_WAIT_NANOS.fetch_add(wait_nanos, Ordering::Relaxed);
+    RECV_READ_NANOS.fetch_add(read_nanos, Ordering::Relaxed);
+}
+
+fn read_msg(stream: &mut TcpStream) -> std::io::Result<(Msg, u64, u64)> {
+    let wait_start = Instant::now();
     let mut tag = [0u8; 1];
     stream.read_exact(&mut tag)?;
-    match tag[0] {
+    let wait_nanos = wait_start.elapsed().as_nanos() as u64;
+    let read_start = Instant::now();
+    let msg = match tag[0] {
         MSG_MUL_TO_HP => {
             let mut buf = [0u8; 17];
             stream.read_exact(&mut buf)?;
@@ -316,37 +416,38 @@ fn read_msg(stream: &mut TcpStream) -> std::io::Result<Msg> {
             let mut my = [0u8; 8];
             mx.copy_from_slice(&buf[1..9]);
             my.copy_from_slice(&buf[9..17]);
-            Ok(Msg::MulToHp {
+            Msg::MulToHp {
                 id,
                 mx: u64::from_be_bytes(mx),
                 my: u64::from_be_bytes(my),
-            })
+            }
         }
         MSG_MATMUL_TO_HP => {
             let mut id = [0u8; 1];
             stream.read_exact(&mut id)?;
             let a = read_u64_vec(stream)?;
             let b = read_u64_vec(stream)?;
-            Ok(Msg::MatMulToHp { id: id[0], a, b })
+            Msg::MatMulToHp { id: id[0], a, b }
         }
         MSG_MUL_VEC_TO_HP => {
             let mut id = [0u8; 1];
             stream.read_exact(&mut id)?;
             let mx = read_u64_vec(stream)?;
             let my = read_u64_vec(stream)?;
-            Ok(Msg::MulVecToHp { id: id[0], mx, my })
+            Msg::MulVecToHp { id: id[0], mx, my }
         }
         MSG_SHARE => {
             let mut buf = [0u8; 8];
             stream.read_exact(&mut buf)?;
-            Ok(Msg::Share(u64::from_be_bytes(buf)))
+            Msg::Share(u64::from_be_bytes(buf))
         }
-        MSG_SHARE_VEC => Ok(Msg::ShareVec(read_u64_vec(stream)?)),
+        MSG_SHARE_VEC => Msg::ShareVec(read_u64_vec(stream)?),
         MSG_REAL => {
             let mut buf = [0u8; 8];
             stream.read_exact(&mut buf)?;
-            Ok(Msg::Real(f64::from_bits(u64::from_be_bytes(buf))))
+            Msg::Real(f64::from_bits(u64::from_be_bytes(buf)))
         }
+        MSG_REAL_VEC => Msg::RealVec(read_f64_vec(stream)?),
         MSG_REAL_PAIR => {
             let mut buf = [0u8; 16];
             stream.read_exact(&mut buf)?;
@@ -354,21 +455,29 @@ fn read_msg(stream: &mut TcpStream) -> std::io::Result<Msg> {
             let mut b = [0u8; 8];
             a.copy_from_slice(&buf[..8]);
             b.copy_from_slice(&buf[8..]);
-            Ok(Msg::RealPair(
+            Msg::RealPair(
                 f64::from_bits(u64::from_be_bytes(a)),
                 f64::from_bits(u64::from_be_bytes(b)),
-            ))
+            )
+        }
+        MSG_REAL_PAIR_VEC => {
+            let a = read_f64_vec(stream)?;
+            let b = read_f64_vec(stream)?;
+            Msg::RealPairVec { a, b }
         }
         MSG_BIT => {
             let mut buf = [0u8; 1];
             stream.read_exact(&mut buf)?;
-            Ok(Msg::Bit(buf[0]))
+            Msg::Bit(buf[0])
         }
-        other => Err(std::io::Error::new(
+        MSG_BIT_VEC => Msg::BitVec(read_u8_vec(stream)?),
+        other => return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("unknown message tag {other}"),
         )),
-    }
+    };
+    let read_nanos = read_start.elapsed().as_nanos() as u64;
+    Ok((msg, wait_nanos, read_nanos))
 }
 
 pub struct SocketPartyEndpoint {
@@ -398,9 +507,10 @@ impl PartyComm for SocketPartyEndpoint {
     fn recv_from_hp(&self) -> Msg {
         let mut stream = self.stream.lock().expect("socket party mutex poisoned");
         let start = Instant::now();
-        let msg = read_msg(&mut stream).expect("socket recv_from_hp failed");
+        let (msg, wait_nanos, read_nanos) =
+            read_msg(&mut stream).expect("socket recv_from_hp failed");
         let bytes = msg_wire_len(&msg);
-        record_recv(start.elapsed().as_nanos() as u64, bytes);
+        record_recv(start.elapsed().as_nanos() as u64, wait_nanos, read_nanos, bytes);
         msg
     }
 }
@@ -444,19 +554,53 @@ impl HpComm for SocketHpEndpoint {
     fn recv_from_p0(&self) -> Msg {
         let mut stream = self.p0.lock().expect("socket hp p0 mutex poisoned");
         let start = Instant::now();
-        let msg = read_msg(&mut stream).expect("socket recv_from_p0 failed");
+        let (msg, wait_nanos, read_nanos) =
+            read_msg(&mut stream).expect("socket recv_from_p0 failed");
         let bytes = msg_wire_len(&msg);
-        record_recv(start.elapsed().as_nanos() as u64, bytes);
+        record_recv(start.elapsed().as_nanos() as u64, wait_nanos, read_nanos, bytes);
         msg
     }
 
     fn recv_from_p1(&self) -> Msg {
         let mut stream = self.p1.lock().expect("socket hp p1 mutex poisoned");
         let start = Instant::now();
-        let msg = read_msg(&mut stream).expect("socket recv_from_p1 failed");
+        let (msg, wait_nanos, read_nanos) =
+            read_msg(&mut stream).expect("socket recv_from_p1 failed");
         let bytes = msg_wire_len(&msg);
-        record_recv(start.elapsed().as_nanos() as u64, bytes);
+        record_recv(start.elapsed().as_nanos() as u64, wait_nanos, read_nanos, bytes);
         msg
+    }
+
+    fn recv_from_parties(&self) -> (Msg, Msg) {
+        let start = Instant::now();
+        std::thread::scope(|scope| {
+            let p0 = scope.spawn(|| {
+                let mut stream = self.p0.lock().expect("socket hp p0 mutex poisoned");
+                let (msg, wait_nanos, read_nanos) =
+                    read_msg(&mut stream).expect("socket recv_from_p0 failed");
+                let bytes = msg_wire_len(&msg);
+                (msg, wait_nanos, read_nanos, bytes)
+            });
+            let p1 = scope.spawn(|| {
+                let mut stream = self.p1.lock().expect("socket hp p1 mutex poisoned");
+                let (msg, wait_nanos, read_nanos) =
+                    read_msg(&mut stream).expect("socket recv_from_p1 failed");
+                let bytes = msg_wire_len(&msg);
+                (msg, wait_nanos, read_nanos, bytes)
+            });
+            let (msg0, wait0, read0, bytes0) =
+                p0.join().expect("socket recv_from_p0 thread failed");
+            let (msg1, wait1, read1, bytes1) =
+                p1.join().expect("socket recv_from_p1 thread failed");
+            record_recv_batch(
+                2,
+                start.elapsed().as_nanos() as u64,
+                wait0.max(wait1),
+                read0.max(read1),
+                bytes0 + bytes1,
+            );
+            (msg0, msg1)
+        })
     }
 
     fn send_to_p0(&self, m: Msg) {
@@ -473,5 +617,26 @@ impl HpComm for SocketHpEndpoint {
         let start = Instant::now();
         write_msg(&mut stream, &m).expect("socket send_to_p1 failed");
         record_send(start.elapsed().as_nanos() as u64, bytes);
+    }
+
+    fn send_to_parties(&self, p0_msg: Msg, p1_msg: Msg) {
+        std::thread::scope(|scope| {
+            let p0 = scope.spawn(|| {
+                let bytes = msg_wire_len(&p0_msg);
+                let mut stream = self.p0.lock().expect("socket hp p0 mutex poisoned");
+                let start = Instant::now();
+                write_msg(&mut stream, &p0_msg).expect("socket send_to_p0 failed");
+                record_send(start.elapsed().as_nanos() as u64, bytes);
+            });
+            let p1 = scope.spawn(|| {
+                let bytes = msg_wire_len(&p1_msg);
+                let mut stream = self.p1.lock().expect("socket hp p1 mutex poisoned");
+                let start = Instant::now();
+                write_msg(&mut stream, &p1_msg).expect("socket send_to_p1 failed");
+                record_send(start.elapsed().as_nanos() as u64, bytes);
+            });
+            p0.join().expect("socket send_to_p0 thread failed");
+            p1.join().expect("socket send_to_p1 thread failed");
+        });
     }
 }

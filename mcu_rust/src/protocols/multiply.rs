@@ -125,20 +125,19 @@ pub fn party_multiply_batch<C: PartyComm>(
 
 /// HP 通过 Comm 处理一次乘法。
 pub fn hp_multiply<C: HpComm>(asprg_p0: &mut PrgSync, comm: &C) {
-    let (_, mx0, my0) = comm.recv_from_p0().as_mul();
-    let (_, mx1, my1) = comm.recv_from_p1().as_mul();
+    let (msg0, msg1) = comm.recv_from_parties();
+    let (_, mx0, my0) = msg0.as_mul();
+    let (_, mx1, my1) = msg1.as_mul();
     let mx = add(mx0, mx1);
     let my = add(my0, my1);
     let product = mul(mx, my);
     let s0 = asprg_p0.next();
     let s1 = sub(product, s0);
-    comm.send_to_p0(Msg::Share(s0));
-    comm.send_to_p1(Msg::Share(s1));
+    comm.send_to_parties(Msg::Share(s0), Msg::Share(s1));
 }
 
 pub fn hp_multiply_batch<C: HpComm>(n: usize, asprg_p0: &mut PrgSync, comm: &C) {
-    let msg0 = comm.recv_from_p0();
-    let msg1 = comm.recv_from_p1();
+    let (msg0, msg1) = comm.recv_from_parties();
     let (_, mx0, my0) = msg0.as_mul_vec();
     let (_, mx1, my1) = msg1.as_mul_vec();
     assert_eq!(mx0.len(), n, "p0 multiply batch x length mismatch");
@@ -156,8 +155,7 @@ pub fn hp_multiply_batch<C: HpComm>(n: usize, asprg_p0: &mut PrgSync, comm: &C) 
         out0.push(s0);
         out1.push(s1);
     }
-    comm.send_to_p0(Msg::ShareVec(out0));
-    comm.send_to_p1(Msg::ShareVec(out1));
+    comm.send_to_parties(Msg::ShareVec(out0), Msg::ShareVec(out1));
 }
 
 #[cfg(test)]

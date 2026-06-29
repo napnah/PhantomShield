@@ -9,9 +9,10 @@ use mcu_rust::channel::{
 use mcu_rust::prg::PrgSync;
 use mcu_rust::protocols::GELU_COEF;
 use mcu_rust::real_protocols::{
-    hp_exp, hp_gelu, hp_sigmoid, hp_sign_bicoptor, hp_sign_ge_zero, hp_softmax, hp_wrap,
-    hp_wrap_bicoptor, party_exp, party_gelu, party_sigmoid, party_sign_bicoptor,
-    party_sign_ge_zero, party_softmax_all, party_wrap, party_wrap_bicoptor,
+    hp_exp_batch, hp_gelu_batch, hp_sigmoid_batch, hp_sign_bicoptor_batch,
+    hp_sign_ge_zero_batch, hp_softmax_batch, hp_wrap_batch, hp_wrap_bicoptor_batch,
+    party_exp_batch, party_gelu_batch, party_sigmoid_batch, party_sign_bicoptor_batch,
+    party_sign_ge_zero_batch, party_softmax_batch, party_wrap_batch, party_wrap_bicoptor_batch,
 };
 
 const SHARED_SEED: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
@@ -29,6 +30,13 @@ enum Op {
     Sigmoid,
     Softmax,
     Gelu,
+}
+
+enum PartyOutput {
+    Int(Vec<i64>),
+    Bit(Vec<u8>),
+    Real(Vec<f64>),
+    Matrix(Vec<Vec<f64>>),
 }
 
 fn splitmix64(state: &mut u64) -> u64 {
@@ -144,17 +152,15 @@ fn run_hp(args: &[String]) -> std::io::Result<()> {
     let mut asprg = PrgSync::new(&HP_P0_SEED);
     reset_socket_stats();
     let start = Instant::now();
-    for _ in 0..n {
-        match op {
-            Op::Wrap => hp_wrap(&comm),
-            Op::WrapBicoptor => hp_wrap_bicoptor(&comm),
-            Op::Sign => hp_sign_ge_zero(&comm),
-            Op::SignBicoptor => hp_sign_bicoptor(lx, &comm),
-            Op::Exp => hp_exp(&mut asprg, &comm),
-            Op::Sigmoid => hp_sigmoid(&mut asprg, &comm),
-            Op::Softmax => hp_softmax(k, &mut asprg, &comm),
-            Op::Gelu => hp_gelu(&mut asprg, &comm),
-        }
+    match op {
+        Op::Wrap => hp_wrap_batch(n, &comm),
+        Op::WrapBicoptor => hp_wrap_bicoptor_batch(n, &comm),
+        Op::Sign => hp_sign_ge_zero_batch(n, &comm),
+        Op::SignBicoptor => hp_sign_bicoptor_batch(n, lx, &comm),
+        Op::Exp => hp_exp_batch(n, &mut asprg, &comm),
+        Op::Sigmoid => hp_sigmoid_batch(n, &mut asprg, &comm),
+        Op::Softmax => hp_softmax_batch(n, k, &mut asprg, &comm),
+        Op::Gelu => hp_gelu_batch(n, &mut asprg, &comm),
     }
     let elapsed = start.elapsed().as_secs_f64();
     println!("[HP] done: {:.6}s, {:.0} op/s", elapsed, n as f64 / elapsed);
@@ -174,81 +180,116 @@ fn run_party(args: &[String], id: u8) -> std::io::Result<()> {
     );
     let comm = SocketPartyEndpoint::connect(&addr, id)?;
     let mut prg0 = PrgSync::new(&SHARED_SEED);
-    let mut writer = BufWriter::new(File::create(&out)?);
     reset_socket_stats();
     let start = Instant::now();
-    for i in 0..n {
-        match op {
-            Op::Wrap => {
-                let x = value(i, op);
-                let share = share_value(x, i, id);
-                let r = 7.0 + ((i * 31) % 240) as f64;
-                let w = party_wrap(id, share, r, 256.0, &mut prg0, &comm);
-                writeln!(writer, "{w}")?;
-            }
-            Op::WrapBicoptor => {
-                let x = value(i, op);
-                let share = share_value(x, i, id);
-                let r = 7.0 + ((i * 31) % 240) as f64;
-                let w = party_wrap_bicoptor(id, share, r, 256.0, &mut prg0, &comm);
-                writeln!(writer, "{w}")?;
-            }
-            Op::Sign => {
-                let x = value(i, op);
-                let share = share_value(x, i, id);
-                let bit = party_sign_ge_zero(share, &mut prg0, &comm);
-                writeln!(writer, "{bit}")?;
-            }
-            Op::SignBicoptor => {
-                let lx = lx_arg(args);
-                let x = integer_value(i, lx);
-                let share = share_int(x, i, id);
-                let bit = party_sign_bicoptor(id, share, lx, &mut prg0, &comm);
-                writeln!(writer, "{bit}")?;
-            }
-            Op::Exp => {
-                let x = value(i, op);
-                let share = share_value(x, i, id);
-                let y = party_exp(id, share, &mut prg0, &comm);
-                writeln!(writer, "{y:.17e}")?;
-            }
-            Op::Sigmoid => {
-                let x = value(i, op);
-                let share = share_value(x, i, id);
-                let y = party_sigmoid(id, share, &mut prg0, &comm);
-                writeln!(writer, "{y:.17e}")?;
-            }
-            Op::Softmax => {
-                let xs = vector_value(i, k);
-                let shares: Vec<f64> = xs
-                    .iter()
-                    .enumerate()
-                    .map(|(j, &v)| share_value(v, i * k + j, id))
-                    .collect();
-                let vals: Vec<String> = party_softmax_all(id, &shares, &mut prg0, &comm)
-                    .into_iter()
-                    .map(|y| format!("{y:.17e}"))
-                    .collect();
-                writeln!(writer, "{}", vals.join(","))?;
-            }
-            Op::Gelu => {
-                let x = value(i, op);
-                let share = share_value(x, i, id);
-                let y = party_gelu(id, share, &mut prg0, &comm);
-                writeln!(writer, "{y:.17e}")?;
-            }
+    let output = match op {
+        Op::Wrap => {
+            let shares: Vec<f64> = (0..n)
+                .map(|i| share_value(value(i, op), i, id))
+                .collect();
+            let rs: Vec<f64> = (0..n).map(|i| 7.0 + ((i * 31) % 240) as f64).collect();
+            PartyOutput::Int(party_wrap_batch(id, &shares, &rs, 256.0, &mut prg0, &comm))
         }
-    }
+        Op::WrapBicoptor => {
+            let shares: Vec<f64> = (0..n)
+                .map(|i| share_value(value(i, op), i, id))
+                .collect();
+            let rs: Vec<f64> = (0..n).map(|i| 7.0 + ((i * 31) % 240) as f64).collect();
+            PartyOutput::Int(party_wrap_bicoptor_batch(
+                id, &shares, &rs, 256.0, &mut prg0, &comm,
+            ))
+        }
+        Op::Sign => {
+            let shares: Vec<f64> = (0..n)
+                .map(|i| share_value(value(i, op), i, id))
+                .collect();
+            PartyOutput::Bit(party_sign_ge_zero_batch(&shares, &mut prg0, &comm))
+        }
+        Op::SignBicoptor => {
+            let lx = lx_arg(args);
+            let shares: Vec<u64> = (0..n)
+                .map(|i| share_int(integer_value(i, lx), i, id))
+                .collect();
+            PartyOutput::Bit(party_sign_bicoptor_batch(id, &shares, lx, &mut prg0, &comm))
+        }
+        Op::Exp => {
+            let shares: Vec<f64> = (0..n)
+                .map(|i| share_value(value(i, op), i, id))
+                .collect();
+            PartyOutput::Real(party_exp_batch(id, &shares, &mut prg0, &comm))
+        }
+        Op::Sigmoid => {
+            let shares: Vec<f64> = (0..n)
+                .map(|i| share_value(value(i, op), i, id))
+                .collect();
+            PartyOutput::Real(party_sigmoid_batch(id, &shares, &mut prg0, &comm))
+        }
+        Op::Softmax => {
+            let shares: Vec<Vec<f64>> = (0..n)
+                .map(|i| {
+                    vector_value(i, k)
+                        .into_iter()
+                        .enumerate()
+                        .map(|(j, v)| share_value(v, i * k + j, id))
+                        .collect()
+                })
+                .collect();
+            PartyOutput::Matrix(party_softmax_batch(id, &shares, &mut prg0, &comm))
+        }
+        Op::Gelu => {
+            let shares: Vec<f64> = (0..n)
+                .map(|i| share_value(value(i, op), i, id))
+                .collect();
+            PartyOutput::Real(party_gelu_batch(id, &shares, &mut prg0, &comm))
+        }
+    };
     let protocol_elapsed = start.elapsed().as_secs_f64();
     let write_start = Instant::now();
+    let mut writer = BufWriter::new(File::create(&out)?);
+    write_output(&mut writer, output)?;
     writer.flush()?;
     let write_elapsed = write_start.elapsed().as_secs_f64();
-    let elapsed = protocol_elapsed + write_elapsed;
-    println!("[P{id}] done: {:.6}s, {:.0} op/s, wrote {out}", elapsed, n as f64 / elapsed);
-    print_timing(&format!("p{id}"), elapsed);
+    println!(
+        "[P{id}] done: {:.6}s, {:.0} op/s, wrote {out}",
+        protocol_elapsed,
+        n as f64 / protocol_elapsed
+    );
+    print_timing(&format!("p{id}"), protocol_elapsed);
     println!(
         "[P{id}] timing_breakdown protocol_s={protocol_elapsed:.9} write_s={write_elapsed:.9}"
     );
+    Ok(())
+}
+
+fn write_output(writer: &mut BufWriter<File>, output: PartyOutput) -> std::io::Result<()> {
+    match output {
+        PartyOutput::Int(values) => {
+            for value in values {
+                writeln!(writer, "{value}")?;
+            }
+        }
+        PartyOutput::Bit(values) => {
+            for value in values {
+                writeln!(writer, "{value}")?;
+            }
+        }
+        PartyOutput::Real(values) => {
+            for value in values {
+                writeln!(writer, "{value:.17e}")?;
+            }
+        }
+        PartyOutput::Matrix(rows) => {
+            for row in rows {
+                for (j, value) in row.into_iter().enumerate() {
+                    if j > 0 {
+                        write!(writer, ",")?;
+                    }
+                    write!(writer, "{value:.17e}")?;
+                }
+                writeln!(writer)?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -256,10 +297,12 @@ fn print_timing(role: &str, total_s: f64) {
     let stats = socket_stats_snapshot();
     let send_s = stats.send_nanos as f64 / 1e9;
     let recv_s = stats.recv_nanos as f64 / 1e9;
+    let recv_wait_s = stats.recv_wait_nanos as f64 / 1e9;
+    let recv_read_s = stats.recv_read_nanos as f64 / 1e9;
     let comm_s = send_s + recv_s;
     let local_s = (total_s - comm_s).max(0.0);
     println!(
-        "[{role}] timing total_s={total_s:.9} comm_s={comm_s:.9} local_s={local_s:.9} send_s={send_s:.9} recv_s={recv_s:.9} send_msgs={} recv_msgs={} send_bytes={} recv_bytes={}",
+        "[{role}] timing total_s={total_s:.9} comm_s={comm_s:.9} local_s={local_s:.9} send_s={send_s:.9} recv_s={recv_s:.9} recv_wait_s={recv_wait_s:.9} recv_read_s={recv_read_s:.9} send_msgs={} recv_msgs={} send_bytes={} recv_bytes={}",
         stats.send_messages,
         stats.recv_messages,
         stats.send_bytes,

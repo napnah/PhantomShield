@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PhantomShield 隐私推理演示</title>
+<title>AegisX 隐私推理演示</title>
 <style>
   :root {
     --bg: #08090d; --panel: #12141c; --panel-hi: #1a1e2a;
@@ -220,7 +220,7 @@
           <div class="leak-risk">⚠ 用户隐私完全暴露</div>
         </div>
         <div class="leak-card safe">
-          <div class="leak-title">✓ PhantomShield</div>
+          <div class="leak-title">✓ AegisX</div>
           <div class="leak-sublabel">P1 服务商所见：</div>
           <div class="leak-content" id="leakCipher">[等待推理...]</div>
           <div class="leak-risk">✓ 仅见随机份额</div>
@@ -236,7 +236,7 @@
     <div class="panel">
       <h2>GLUE 精度 · 精确 Softmax 的价值</h2>
       <table>
-        <thead><tr><th>任务</th><th style="text-align:right">SecFormer</th><th style="text-align:right">PhantomShield</th></tr></thead>
+        <thead><tr><th>任务</th><th style="text-align:right">SecFormer</th><th style="text-align:right">AegisX</th></tr></thead>
         <tbody id="accBody"></tbody>
       </table>
       <div style="font-size:14px;color:var(--ink-dim);margin-top:16px;line-height:1.7">
@@ -245,7 +245,7 @@
       </div>
     </div>
   </div>
-  <footer>PhantomShield · 第十九届全国大学生信息安全竞赛（作品赛）· 队伍：β贝塔 · 2026</footer>
+  <footer>AegisX · 第十九届全国大学生信息安全竞赛（作品赛）· 队伍：β贝塔 · 2026</footer>
 </div>
 
 <script>
@@ -261,7 +261,7 @@ let PERF = {
     { method: '明文推理', v: 0.8, color: '#34e08a' },
     { method: 'CrypTen原始', v: 71.0, color: '#ff4d57' },
     { method: 'SecFormer', v: 19.5, color: '#ffa040' },
-    { method: 'PhantomShield', v: 25.0, color: '#4d9fff' },
+    { method: 'AegisX', v: 25.0, color: '#4d9fff' },
   ],
   acc: [
     { task: 'CoLA(Large)', sec: '0.0', mcu: '59.92', zero: true },

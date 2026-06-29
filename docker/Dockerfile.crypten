@@ -23,9 +23,13 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
         scikit-learn \
         scipy \
         tensorboard \
+        transformers==4.46.0 \
+        safetensors \
     && python -m pip install --no-cache-dir --no-deps crypten==0.4.1
 
 COPY scripts /workspace/scripts
+COPY transformer /workspace/transformer
+COPY checkpoints/bert-sst2 /workspace/checkpoints/bert-sst2
 COPY docker/crypten_rank_bench.py /workspace/docker/crypten_rank_bench.py
 
 CMD ["python", "/workspace/docker/crypten_rank_bench.py"]

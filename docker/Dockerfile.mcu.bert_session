@@ -1,0 +1,4 @@
+FROM phantomshield-mcu:bert-session
+
+ENTRYPOINT ["/usr/local/bin/mcu_entrypoint.sh"]
+CMD []

@@ -31,5 +31,6 @@ COPY scripts /workspace/scripts
 COPY transformer /workspace/transformer
 COPY checkpoints/bert-sst2 /workspace/checkpoints/bert-sst2
 COPY docker/crypten_rank_bench.py /workspace/docker/crypten_rank_bench.py
+COPY docker/crypten_persistent_service.py /workspace/docker/crypten_persistent_service.py
 
 CMD ["python", "/workspace/docker/crypten_rank_bench.py"]

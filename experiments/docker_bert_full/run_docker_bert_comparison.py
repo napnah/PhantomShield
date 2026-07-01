@@ -143,7 +143,22 @@ def divergence(plain: list[float], other: list[float]) -> dict[str, float]:
     }
 
 
-def load_samples(limit: int) -> list[dict]:
+def load_samples(limit: int, samples_json: str | None = None) -> list[dict]:
+    if samples_json:
+        payload = json.loads(Path(samples_json).read_text(encoding="utf-8-sig"))
+        if isinstance(payload, dict):
+            samples = payload.get("samples", [])
+        else:
+            samples = payload
+        if not isinstance(samples, list) or not samples:
+            raise ValueError("--samples-json must contain a non-empty list or {'samples': [...]}")
+        normalized = []
+        for sample in samples:
+            if isinstance(sample, str):
+                normalized.append({"text": sample, "label": None})
+            else:
+                normalized.append(sample)
+        return normalized[:limit]
     samples = DEFAULT_SAMPLES[:limit]
     if limit <= len(samples):
         return samples
@@ -328,6 +343,7 @@ def main() -> int:
     parser.add_argument("--crypten-nonlinear", choices=["native", "legacy_two_quad"], default="native")
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--stage-models", action="store_true")
+    parser.add_argument("--samples-json")
     args = parser.parse_args()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -340,7 +356,7 @@ def main() -> int:
     out_host.mkdir(parents=True, exist_ok=True)
     logs.mkdir(parents=True, exist_ok=True)
 
-    samples = load_samples(args.samples)
+    samples = load_samples(args.samples, args.samples_json)
     sample_payload = {"samples": samples}
     (out / "samples.json").write_text(json.dumps(sample_payload, indent=2), encoding="utf-8")
     (bind_host / "samples.json").write_text(json.dumps(sample_payload, indent=2), encoding="utf-8")

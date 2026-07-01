@@ -1,0 +1,43 @@
+services:
+  mcu-warm-hp:
+    image: ${MCU_IMAGE:-phantomshield-mcu:bert-session-fixed}
+    entrypoint: ["sleep", "infinity"]
+    volumes:
+      - ${AEGISX_WARM_OUT_HOST:-../.local/docker_warm/out}:/workspace/out
+      - ${AEGISX_WARM_SHARES_HOST:-../.local/docker_warm/bert_shares}:/workspace/bert_shares:ro
+    networks:
+      - mpcnet
+
+  mcu-warm-p0:
+    image: ${MCU_IMAGE:-phantomshield-mcu:bert-session-fixed}
+    entrypoint: ["sleep", "infinity"]
+    volumes:
+      - ${AEGISX_WARM_OUT_HOST:-../.local/docker_warm/out}:/workspace/out
+      - ${AEGISX_WARM_SHARES_HOST:-../.local/docker_warm/bert_shares}:/workspace/bert_shares:ro
+    networks:
+      - mpcnet
+
+  mcu-warm-p1:
+    image: ${MCU_IMAGE:-phantomshield-mcu:bert-session-fixed}
+    entrypoint: ["sleep", "infinity"]
+    volumes:
+      - ${AEGISX_WARM_OUT_HOST:-../.local/docker_warm/out}:/workspace/out
+      - ${AEGISX_WARM_SHARES_HOST:-../.local/docker_warm/bert_shares}:/workspace/bert_shares:ro
+    networks:
+      - mpcnet
+
+  crypten-warm-r0:
+    image: ${CRYPTEN_IMAGE:-phantomshield-crypten:local}
+    entrypoint: ["sleep", "infinity"]
+    volumes:
+      - ${AEGISX_WARM_OUT_HOST:-../.local/docker_warm/out}:/workspace/out
+    networks:
+      - mpcnet
+
+  crypten-warm-r1:
+    image: ${CRYPTEN_IMAGE:-phantomshield-crypten:local}
+    entrypoint: ["sleep", "infinity"]
+    volumes:
+      - ${AEGISX_WARM_OUT_HOST:-../.local/docker_warm/out}:/workspace/out
+    networks:
+      - mpcnet

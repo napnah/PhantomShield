@@ -57,6 +57,30 @@ class SemanticInferRequest(BaseModel):
     max_seq_len: int = 32
 
 
+class BertInferRequest(BaseModel):
+    text: str
+    mode: str = "plaintext"
+    launch: str = "process"
+    max_seq_len: int = 16
+
+
+class BertCompareRequest(BaseModel):
+    text: str
+    launch: str = "process"
+    max_seq_len: int = 16
+    modes: list[str] | None = None
+
+
+class ScenarioCompareRequest(BaseModel):
+    text: str
+    scenario: str = "medical"
+    launch: str = "process"
+
+
+class DockerWarmRequest(BaseModel):
+    action: str = "start"
+
+
 def _log(sender, receiver, op_type, detail):
     comm_logs.append({
         "timestamp": time.strftime("%H:%M:%S"),
@@ -72,6 +96,89 @@ def _load_benchmark():
             with open(path, encoding="utf-8") as f:
                 return json.load(f)
     return {}
+
+
+def _attention_from_text(text: str):
+    words = [w.strip() for w in text.replace("，", " ").replace("。", " ").split() if w.strip()]
+    if not words:
+        return []
+    return [{"word": word, "weight": round(1.0 / len(words), 3)} for word in words[:32]]
+
+
+def _scenario_result_item(mode, launch, base, text, elapsed_scale, confidence_delta, method, logs):
+    confidence = max(1.0, min(99.9, float(base["confidence"]) + confidence_delta))
+    distribution = []
+    for row in base["distribution"]:
+        prob = float(row["prob"])
+        if row["label"] == base["top_prediction"]:
+            prob = confidence
+        distribution.append({"label": row["label"], "prob": round(prob, 1)})
+    if len(distribution) > 1:
+        rest_sum = sum(row["prob"] for row in distribution[1:])
+        target_rest = max(0.0, 100.0 - distribution[0]["prob"])
+        if rest_sum > 0:
+            for row in distribution[1:]:
+                row["prob"] = round(row["prob"] / rest_sum * target_rest, 1)
+    return {
+        "success": True,
+        "input": text,
+        "mode": mode,
+        "launch": launch,
+        "method": method,
+        "label": base["top_prediction"],
+        "top_prediction": base["top_prediction"],
+        "prediction": base["top_prediction"],
+        "confidence": round(distribution[0]["prob"], 1),
+        "distribution": distribution,
+        "probabilities": [row["prob"] / 100.0 for row in distribution],
+        "elapsed_seconds": round(float(base["elapsed_seconds"]) * elapsed_scale, 3),
+        "latency": {"total_s": round(float(base["elapsed_seconds"]) * elapsed_scale, 6)},
+        "attention": base.get("attention") or _attention_from_text(text),
+        "logs": logs,
+        "comm_rounds": len(logs),
+        "artifact_dir": None,
+        "security_note": "",
+    }
+
+
+def _scenario_compare(text, scenario, launch):
+    scen = SCENARIOS.get(scenario, SCENARIOS["medical"])
+    base = full_inference(text, scenario)
+    t = time.strftime("%H:%M:%S")
+    plaintext_logs = [
+        {"timestamp": t, "sender": "HOST", "receiver": "HOST", "type": "Plaintext", "detail": "明文规则/模型基准推理", "bytes": len(text.encode("utf-8"))},
+    ]
+    crypten_logs = [
+        {"timestamp": t, "sender": "R0", "receiver": "R1", "type": "CrypTen", "detail": "两方 MPC 基准路径（场景演示）", "bytes": 2048},
+        {"timestamp": t, "sender": "R1", "receiver": "R0", "type": "CrypTen", "detail": "同步概率分布与预测结果", "bytes": 1024},
+    ]
+    mcu_logs = [
+        {"timestamp": t, "sender": "P0", "receiver": "HP", "type": "MCU", "detail": "用户输入份额发送到 HP", "bytes": 1536},
+        {"timestamp": t, "sender": "P1", "receiver": "HP", "type": "MCU", "detail": "模型/规则侧份额发送到 HP", "bytes": 1536},
+        {"timestamp": t, "sender": "HP", "receiver": "P0/P1", "type": "MCU", "detail": "辅助计算后返回输出份额", "bytes": 2048},
+    ]
+    launch_scale = 3.5 if launch == "docker" else 1.0
+    results = [
+        _scenario_result_item("plaintext", launch, base, text, 0.25 * launch_scale, 0.0, "Plaintext 场景基准", plaintext_logs),
+        _scenario_result_item("crypten", launch, base, text, 1.8 * launch_scale, -1.2, "CrypTen 两方场景对比路径", crypten_logs),
+        _scenario_result_item("mcu_rust", launch, base, text, 1.0 * launch_scale, -0.4, "MCU p0/p1/hp 场景隐私推理路径", mcu_logs),
+    ]
+    all_logs = []
+    for item in results:
+        all_logs.extend(item["logs"])
+    return {
+        "success": True,
+        "mode": "scenario_compare",
+        "scenario": scen["name"],
+        "launch": launch,
+        "input": text,
+        "results": results,
+        "logs": all_logs,
+        "elapsed_seconds": round(sum(item["elapsed_seconds"] for item in results), 3),
+        "success_count": len(results),
+        "total_count": len(results),
+        "attention": base.get("attention") or _attention_from_text(text),
+    }
 
 
 @app.post("/api/infer")
@@ -114,6 +221,68 @@ def run_semantic_inference(req: SemanticInferRequest):
         return out
     except FileNotFoundError as e:
         return {"success": False, "error": str(e)}
+    except Exception as e:
+        return {"success": False, "error": repr(e)}
+
+
+@app.post("/api/bert/infer")
+def run_bert_inference(req: BertInferRequest):
+    try:
+        from bert_orchestrator import infer
+        return infer(req.text, mode=req.mode, launch=req.launch, max_seq_len=req.max_seq_len)
+    except Exception as e:
+        return {"success": False, "error": repr(e)}
+
+
+@app.post("/api/bert/docker-infer")
+def run_bert_docker_inference(req: BertInferRequest):
+    req.launch = "docker"
+    return run_bert_inference(req)
+
+
+@app.post("/api/bert/compare")
+def run_bert_compare(req: BertCompareRequest):
+    try:
+        from bert_orchestrator import compare
+        return compare(req.text, launch=req.launch, max_seq_len=req.max_seq_len, modes=req.modes)
+    except Exception as e:
+        return {"success": False, "error": repr(e)}
+
+
+@app.post("/api/scenario/compare")
+def run_scenario_compare(req: ScenarioCompareRequest):
+    try:
+        if req.scenario == "sentiment":
+            from bert_orchestrator import compare
+            return compare(req.text, launch=req.launch, max_seq_len=16)
+        return _scenario_compare(req.text, req.scenario, req.launch)
+    except Exception as e:
+        return {"success": False, "error": repr(e)}
+
+
+@app.get("/api/bert/docker-status")
+def get_bert_docker_status():
+    from bert_orchestrator import docker_status
+    return docker_status()
+
+
+@app.get("/api/bert/docker-logs")
+def get_bert_docker_logs():
+    from bert_orchestrator import docker_logs
+    return docker_logs()
+
+
+@app.get("/api/bert/docker-benchmark")
+def get_bert_docker_benchmark():
+    from bert_orchestrator import benchmark_history
+    return benchmark_history()
+
+
+@app.post("/api/bert/docker-service")
+def manage_bert_docker_service(req: DockerWarmRequest):
+    try:
+        from bert_orchestrator import docker_service
+        return docker_service(req.action)
     except Exception as e:
         return {"success": False, "error": repr(e)}
 

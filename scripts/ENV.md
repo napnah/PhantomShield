@@ -1,43 +1,60 @@
-# 环境配置说明（conda base，无需新建 venv）
+# Environment Notes
 
-## 一键补齐依赖
+The project should be deployable without relying on one developer's local machine layout. Prefer Docker for CrypTen and MCU execution, and keep the host Python environment lightweight for orchestration and the dashboard backend.
+
+## Host Python
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -r requirements.txt
+```
+
+PowerShell:
 
 ```powershell
-cd F:\AI_Agent\MCU-transformer
-pip install --user -r requirements.txt
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+python -m pip install -r requirements.txt
+```
+
+## Models
+
+Download into the repository root:
+
+```bash
 python scripts/download_models.py
 ```
 
-> base 环境若 `pip install` 报权限错误，加 `--user`。  
-> CrypTen 安装若遇 sklearn 报错：`$env:SKLEARN_ALLOW_DEPRECATED_SKLEARN_PACKAGE_INSTALL="True"`  
-> PyTorch 2.8 需 `scripts/crypten_compat.py` 补丁（实验脚本已自动加载）。
+Or use external model paths for Docker runners:
 
-或一键配置：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\setup_env.ps1
+```bash
+export PHANTOM_BERT_BASE_HOST=/abs/path/bert-base-uncased
+export PHANTOM_CHECKPOINTS_HOST=/abs/path/checkpoints
 ```
 
-## 验证
+PowerShell:
 
 ```powershell
-$env:PYTHONIOENCODING="utf-8"
-
-# 1) Dashboard 关键词分类（后端）
-cd dashboard\backend
-python main.py
-# 浏览器打开 dashboard\frontend\index.html
-
-# 2) CrypTen + BERT 语义分类
-cd ..\..
-python experiments\crypten_bert_classify.py
+$env:PHANTOM_BERT_BASE_HOST = "D:\models\bert-base-uncased"
+$env:PHANTOM_CHECKPOINTS_HOST = "D:\models\checkpoints"
 ```
 
-## 当前环境快照
+## Dashboard
 
-| 组件 | 本机版本 |
-|---|---|
-| Python | 3.10.20 (conda base) |
-| PyTorch | 2.8.0+cu128 |
-| transformers | 4.46.0 (--user) |
-| crypten | 0.4.1 (--user) |
+```bash
+python dashboard/backend/main.py
+```
+
+Open `dashboard/frontend/index.html`. The BERT sentiment scenario supports process launch and Docker launch, plus a three-path comparison for plaintext, CrypTen, and MCU.
+
+## Docker
+
+```bash
+docker compose -f docker/docker-compose.mpc.yml build crypten-r0 mcu-hp
+docker build -f docker/Dockerfile.mcu.bert_session -t phantomshield-mcu:bert-session-fixed .
+```
+
+See `docker/README.md` and top-level `README.md` for the current full command list.

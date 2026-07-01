@@ -117,10 +117,12 @@ def main() -> int:
     parser.add_argument("--layers", type=int, default=1)
     parser.add_argument("--scale-bits", type=int, default=DEFAULT_SCALE_BITS)
     parser.add_argument("--device", default="cpu")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--static-only", action="store_true", help="Export model/checkpoint shares only.")
+    group.add_argument("--input-only", action="store_true", help="Export input hidden/mask shares only.")
     args = parser.parse_args()
 
     model = load_classification_model(args.device)
-    tokenizer = load_tokenizer()
     labels: list[int | None] = []
     if args.samples_json:
         raw_samples = json.loads(Path(args.samples_json).read_text(encoding="utf-8-sig"))
@@ -129,17 +131,20 @@ def main() -> int:
     else:
         texts = [args.text]
         labels = [None]
-    enc = tokenizer(
-        texts,
-        return_tensors="pt",
-        truncation=True,
-        max_length=args.max_seq_len,
-        padding="max_length",
-    )
-    inputs = {k: v.to(args.device) for k, v in enc.items()}
-    hidden = embed_inputs(model, inputs)
-    all_weights = extract_all_layer_weights(model)
-    max_layers = min(args.layers, len(all_weights))
+    hidden = None
+    inputs = None
+    if not args.static_only:
+        tokenizer = load_tokenizer()
+        enc = tokenizer(
+            texts,
+            return_tensors="pt",
+            truncation=True,
+            max_length=args.max_seq_len,
+            padding="max_length",
+        )
+        inputs = {k: v.to(args.device) for k, v in enc.items()}
+        hidden = embed_inputs(model, inputs)
+    max_layers = min(args.layers, len(model.bert.encoder.layer))
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out = ROOT / "experiments" / f"{timestamp}_bert_session_shares"
@@ -149,8 +154,10 @@ def main() -> int:
     p1_dir.mkdir(parents=True, exist_ok=True)
 
     rows: list[dict] = []
-    write_shared_tensor("hidden", hidden.reshape(-1, hidden.shape[-1]), p0_dir, p1_dir, rows, 0xBEE70001, args.scale_bits)
-    write_public_u64_tensor("attention_mask", inputs["attention_mask"], p0_dir, p1_dir, rows)
+    if not args.static_only:
+        assert hidden is not None and inputs is not None
+        write_shared_tensor("hidden", hidden.reshape(-1, hidden.shape[-1]), p0_dir, p1_dir, rows, 0xBEE70001, args.scale_bits)
+        write_public_u64_tensor("attention_mask", inputs["attention_mask"], p0_dir, p1_dir, rows)
 
     seed = 0xC0010000
     wanted = [
@@ -171,47 +178,50 @@ def main() -> int:
         "ln2_g",
         "ln2_b",
     ]
-    for layer_idx in range(max_layers):
-        for name in wanted:
-            write_shared_tensor(
-                f"layer_{layer_idx:02d}_{name}",
-                all_weights[layer_idx][name],
-                p0_dir,
-                p1_dir,
-                rows,
-                seed,
-                args.scale_bits,
-            )
-            seed += 1
-    write_shared_tensor(
-        "pooler_W",
-        model.bert.pooler.dense.weight.detach().float().T.contiguous(),
-        p0_dir,
-        p1_dir,
-        rows,
-        seed,
-        args.scale_bits,
-    )
-    seed += 1
-    write_shared_tensor(
-        "pooler_b",
-        model.bert.pooler.dense.bias.detach().float().clone(),
-        p0_dir,
-        p1_dir,
-        rows,
-        seed,
-        args.scale_bits,
-    )
-    seed += 1
-    classifier_w, classifier_b = extract_classifier_weights(model)
-    write_shared_tensor("classifier_W", classifier_w, p0_dir, p1_dir, rows, seed, args.scale_bits)
-    seed += 1
-    write_shared_tensor("classifier_b", classifier_b, p0_dir, p1_dir, rows, seed, args.scale_bits)
+    if not args.input_only:
+        all_weights = extract_all_layer_weights(model)
+        for layer_idx in range(max_layers):
+            for name in wanted:
+                write_shared_tensor(
+                    f"layer_{layer_idx:02d}_{name}",
+                    all_weights[layer_idx][name],
+                    p0_dir,
+                    p1_dir,
+                    rows,
+                    seed,
+                    args.scale_bits,
+                )
+                seed += 1
+        write_shared_tensor(
+            "pooler_W",
+            model.bert.pooler.dense.weight.detach().float().T.contiguous(),
+            p0_dir,
+            p1_dir,
+            rows,
+            seed,
+            args.scale_bits,
+        )
+        seed += 1
+        write_shared_tensor(
+            "pooler_b",
+            model.bert.pooler.dense.bias.detach().float().clone(),
+            p0_dir,
+            p1_dir,
+            rows,
+            seed,
+            args.scale_bits,
+        )
+        seed += 1
+        classifier_w, classifier_b = extract_classifier_weights(model)
+        write_shared_tensor("classifier_W", classifier_w, p0_dir, p1_dir, rows, seed, args.scale_bits)
+        seed += 1
+        write_shared_tensor("classifier_b", classifier_b, p0_dir, p1_dir, rows, seed, args.scale_bits)
 
     write_csv(out / "tensor_manifest.csv", rows)
     paths = model_paths()
     manifest = {
         "purpose": "Real BERT embedding and checkpoint weight shares for MCU bert_session real_io mode.",
+        "export_mode": "static_only" if args.static_only else "input_only" if args.input_only else "full",
         "text": args.text if len(texts) == 1 else None,
         "texts": texts,
         "labels": labels,
@@ -219,9 +229,9 @@ def main() -> int:
         "scale_bits": args.scale_bits,
         "layers": max_layers,
         "shape": {
-            "batch": int(hidden.shape[0]),
-            "seq": int(hidden.shape[1]),
-            "hidden": int(hidden.shape[2]),
+            "batch": int(hidden.shape[0]) if hidden is not None else len(texts),
+            "seq": int(hidden.shape[1]) if hidden is not None else args.max_seq_len,
+            "hidden": int(hidden.shape[2]) if hidden is not None else paths["hidden_size"],
             "heads": paths["num_heads"],
             "head_dim": paths["head_dim"],
             "ffn": paths["ffn_size"],

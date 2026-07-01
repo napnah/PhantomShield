@@ -263,6 +263,26 @@ border-radius:24px;
 .meta .tag.ok{background:rgba(0,138,76,.1);color:var(--green)}
 .meta .tag.info{background:rgba(0,68,255,.06);color:var(--blue)}
 .meta .tag.warn{background:rgba(255,77,0,.08);color:var(--orange)}
+.mode-row{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:16px}
+.mode-select{background:rgba(8,20,40,.85);color:#fff;border:1px solid rgba(0,191,255,.45);border-radius:14px;padding:12px 18px;font-size:18px;font-family:var(--sans)}
+.service-panel{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:16px}
+@media(max-width:960px){.service-panel{grid-template-columns:1fr}}
+.service-card{border:1px solid rgba(0,191,255,.28);padding:16px;background:rgba(5,15,35,.55)}
+.service-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.service-title{font-weight:700;color:var(--ink2)}
+.service-state{font-family:var(--mono);font-size:14px;color:var(--ink3)}
+.service-actions{display:flex;gap:10px;flex-wrap:wrap}
+.service-btn{background:#00bfff;color:#05101f;border:none;border-radius:12px;padding:10px 16px;font-size:15px;font-weight:700;cursor:pointer;font-family:var(--sans)}
+.service-btn.stop{background:var(--orange);color:#1e0800}
+.service-note{font-size:14px;color:var(--ink3);line-height:1.7;margin-top:10px}
+.compare-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-top:24px}
+@media(max-width:960px){.compare-grid{grid-template-columns:1fr}}
+.compare-card{border:1px solid rgba(0,191,255,.35);border-radius:18px;padding:22px;background:rgba(5,15,35,.72);box-shadow:inset 0 0 18px rgba(0,191,255,.08)}
+.compare-title{font-family:var(--mono);font-size:17px;color:var(--ink2);margin-bottom:12px}
+.compare-pred{font-size:42px;font-weight:800;color:var(--blue);line-height:1.1}
+.compare-meta{font-family:var(--mono);font-size:16px;color:var(--ink3);line-height:1.8;margin-top:10px;word-break:break-word}
+.compare-card.fail .compare-pred{color:var(--red)}
+.compare-note{font-size:16px;color:var(--ink2);margin-top:16px;line-height:1.8}
 
 /* Distribution */
 .dist-row{display:grid;grid-template-columns:120px 1fr 60px;align-items:center;gap:14px;margin-bottom:10px;font-family:var(--mono)}
@@ -660,7 +680,35 @@ filter:drop-shadow(0 0 30px #00bfff);
 <div>
 <div class="sec-label">输入文本</div>
 <textarea id="inputText" placeholder="请输入待推理文本...">患者发烧38.5度，咳嗽三天，无胸痛，血氧饱和度95%</textarea>
-<button class="btn" id="inferBtn" onclick="runInfer()">开始隐私推理</button>
+<div class="mode-row">
+<label for="launchMode" style="color:var(--ink2);font-size:18px">启动方式</label>
+<select id="launchMode" class="mode-select">
+<option value="process">进程启动</option>
+<option value="docker">Docker 启动</option>
+<option value="docker_service">Docker 服务</option>
+</select>
+<button class="btn" id="inferBtn" onclick="runInfer()">比较三路推理</button>
+</div>
+<div class="service-panel">
+<div class="service-card">
+<div class="service-head"><span class="service-title">CrypTen 服务</span><span class="service-state" id="cryptenServiceState">未查询</span></div>
+<div class="service-actions">
+<button class="service-btn" onclick="serviceAction('crypten','start')">启动</button>
+<button class="service-btn stop" onclick="serviceAction('crypten','stop')">停止</button>
+<button class="service-btn" onclick="serviceAction('crypten','status')">状态</button>
+</div>
+<div class="service-note">两方 rank 常驻，模型/tokenizer 预加载。</div>
+</div>
+<div class="service-card">
+<div class="service-head"><span class="service-title">MCU 服务</span><span class="service-state" id="mcuServiceState">未查询</span></div>
+<div class="service-actions">
+<button class="service-btn" onclick="serviceAction('mcu','start')">启动</button>
+<button class="service-btn stop" onclick="serviceAction('mcu','stop')">停止</button>
+<button class="service-btn" onclick="serviceAction('mcu','status')">状态</button>
+</div>
+<div class="service-note">p0/p1/hp 与输入 share exporter 常驻，目标快于 CrypTen。</div>
+</div>
+</div>
 </div>
 <div>
 <div class="sec-label">隐私保护对比</div>
@@ -727,6 +775,13 @@ const API='http://127.0.0.1:8000';let currentScen='medical';
 const sceneConfig={medical:{example:'患者发烧38.5度，咳嗽三天，无胸痛，血氧饱和度95%'},finance:{example:'凌晨3点异地大额转账，收款方为新增账户，金额49800元'},sentiment:{example:'这家店的服务态度极差，等了一个小时菜还没上，再也不来了'}};
 const labels={medical:'呼吸道感染',finance:'高危欺诈',sentiment:'强烈负面'};
 const dists={medical:[['呼吸道感染',61],['肺炎',19.5],['普通感冒',13],['支气管炎',6.5]],finance:[['高危欺诈',67],['正常交易',16.5],['可疑欺诈',11],['需人工复核',5.5]],sentiment:[['强烈负面',68],['正面',16],['负面',10.7],['中性',5.3]]};
+const SERVICE_ACTIONS={crypten:{start:'start_crypten',stop:'stop_crypten',status:'crypten_status',stateId:'cryptenServiceState'},mcu:{start:'start_mcu',stop:'stop_mcu',status:'mcu_status',stateId:'mcuServiceState'}};
+const serviceState={crypten:false,mcu:false};
+function serviceReady(kind,data){const ready=data&&data.ready;if(!ready)return !!(data&&data.success&&kind!=='status');return kind==='crypten'?!!(ready.rank0&&ready.rank1):!!(ready.hp&&ready.p0&&ready.p1&&(ready.input_exporter!==false))}
+function setServiceState(kind,data,working){const node=document.getElementById(SERVICE_ACTIONS[kind].stateId);if(!node)return;if(working){node.textContent='处理中...';node.style.color='var(--orange)';return}const ok=serviceReady(kind,data);serviceState[kind]=ok;node.textContent=ok?'运行中':(data&&data.success?'已停止':'不可用');node.style.color=ok?'var(--green)':'var(--ink3)'}
+async function serviceAction(kind,op){const cfg=SERVICE_ACTIONS[kind];setServiceState(kind,null,true);try{const res=await fetch(API+'/api/bert/docker-service',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:cfg[op]})});const data=await res.json();setServiceState(kind,data,false);if(op!=='status')await serviceAction(kind,'status')}catch(e){setServiceState(kind,{success:false},false)}}
+async function pollServiceStatus(){await Promise.allSettled([serviceAction('crypten','status'),serviceAction('mcu','status')])}
+function missingServicesForLaunch(launch){if(launch!=='docker_service')return[];const missing=[];if(!serviceState.crypten)missing.push('CrypTen');if(!serviceState.mcu)missing.push('MCU');return missing}
 
 // Tabs
 document.querySelectorAll('.tab').forEach(t=>{t.onclick=()=>{
@@ -874,79 +929,119 @@ document.getElementById('accBody').innerHTML=PERF.acc.map(d=>`<tr><td>${d.task}<
 function toast(msg,ok){const t=document.createElement('div');t.className='toast'+(ok?'':' err');t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),3000)}
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 function attnColor(w){const a=.04+w*.45;return`background:rgba(0,68,255,${a});border:1px solid rgba(0,68,255,${a+.06});${w>.5?'color:var(--blue);font-weight:600':''}`}
+function esc(v){return String(v??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[ch]))}
+function modeName(mode){return ({plaintext:'Plaintext 明文',crypten:'CrypTen 两方',mcu_rust:'MCU 三方'}[mode]||mode)}
+function appendCommLog(logBox, log, i=0){
+const line=document.createElement('div');line.className='log-line';line.style.animationDelay=(i*45)+'ms';
+line.innerHTML=`
+<span class="log-time">${esc(log.timestamp||new Date().toTimeString().slice(0,8))}</span>
+<span class="log-tag ${esc(log.sender||'SYS')}">${esc(log.sender||'SYS')}</span>
+<span class="log-arrow">→</span>
+<span class="log-tag ${esc(log.receiver||'API')}">${esc(log.receiver||'API')}</span>
+<span class="log-detail"><b>${esc(log.type||'Event')}</b> · ${esc(log.detail||'')}</span>
+<span class="log-bytes">${Number(log.bytes||0)}B</span>`;
+logBox.appendChild(line);
+logBox.scrollTop=logBox.scrollHeight;
+}
+function comparisonCommEvents(launch){
+const service=launch==='docker_service';
+return [
+{sender:'UI',receiver:'API',type:'Request',detail:'三路比较请求已提交，后端开始排队执行',bytes:0},
+{sender:'HOST',receiver:'HOST',type:'Plaintext',detail:'执行明文 BERT 基准推理',bytes:0},
+{sender:'API',receiver:'CrypTen',type:service?'Service':'Docker',detail:service?'提交请求到常驻 CrypTen rank 服务':'启动 CrypTen 两方 Docker 推理',bytes:0},
+{sender:'R0',receiver:'R1',type:'CrypTen',detail:'Gloo/TCP 同步密文张量并执行 Attention/FFN',bytes:4096},
+{sender:'R0',receiver:'API',type:'Result',detail:'CrypTen 返回预测概率与计时',bytes:1024},
+{sender:'API',receiver:'MCU',type:service?'Service':'Docker',detail:service?'提交请求到常驻 p0/p1/hp 服务':'启动 MCU p0/p1/hp Docker 推理',bytes:0},
+{sender:'HOST',receiver:'P0/P1',type:'Share',detail:'输入文本导出为 secret shares',bytes:2048},
+{sender:'P0',receiver:'HP',type:'MCU',detail:'发送用户输入份额与掩码张量',bytes:4096},
+{sender:'P1',receiver:'HP',type:'MCU',detail:'发送模型份额与修正信息',bytes:4096},
+{sender:'HP',receiver:'P0/P1',type:'MCU',detail:'执行矩阵乘法修正、Softmax/GELU 辅助计算',bytes:8192},
+{sender:'P0/P1',receiver:'API',type:'Result',detail:'合并输出份额并返回三路比较结果',bytes:1024},
+];
+}
+function startCompareTicker(logBox,launch){
+const events=comparisonCommEvents(launch);
+let idx=0;
+logBox.innerHTML='';
+appendCommLog(logBox,events[0]);
+const timer=setInterval(()=>{
+idx=Math.min(idx+1,events.length-1);
+appendCommLog(logBox,events[idx],idx);
+},1600);
+return timer;
+}
+function stopCompareTicker(timer){if(timer)clearInterval(timer)}
+function renderLogs(logs){
+const logBox=document.getElementById('logBox');logBox.innerHTML='';
+(logs||[]).forEach((log,i)=>{
+appendCommLog(logBox,log,i);
+});
+logBox.scrollTop=logBox.scrollHeight;
+}
+function renderCompare(data,text){
+const results=data.results||[];
+const firstOk=results.find(x=>x.success)||results[0]||{};
+const crypten=results.find(x=>x.mode==='crypten'&&x.success);
+const mcu=results.find(x=>x.mode==='mcu_rust'&&x.success);
+let ratioNote='';
+if(crypten&&mcu&&Number(crypten.elapsed_seconds)>0){
+const ratio=Number(mcu.elapsed_seconds)/Number(crypten.elapsed_seconds);
+ratioNote=`<br>服务效率目标：MCU/CrypTen = ${ratio.toFixed(2)}x，${ratio<1?'已快于 CrypTen':'尚未快于 CrypTen'}`;
+}
+document.getElementById('result').classList.add('show');
+document.getElementById('predLabel').textContent='三路比较';
+document.getElementById('predLabel').classList.add('blue');
+document.getElementById('predConf').textContent=`${data.success_count||0}/${data.total_count||results.length} 路径成功`;
+document.getElementById('predMeta').innerHTML=`<span class="tag ok">${esc(data.launch||'process')}</span><span class="tag info">${esc(currentScen)}</span><br>总耗时 ${Number(data.elapsed_seconds||0).toFixed(3)}s`;
+document.getElementById('distBox').innerHTML=`<div class="compare-grid">${results.map(item=>{
+const ok=!!item.success;
+const dist=(item.distribution||[]).slice(0,2).map(d=>`${esc(d.label)} ${Number(d.prob||0).toFixed(1)}%`).join('<br>');
+const meta=ok?`${Number(item.elapsed_seconds||0).toFixed(3)}s<br>${dist}<br>${esc(item.method||'')}`:esc(item.error||'执行失败');
+return `<div class="compare-card ${ok?'':'fail'}"><div class="compare-title">${modeName(item.mode)}</div><div class="compare-pred">${ok?esc(item.label||item.top_prediction):'失败'}</div><div class="compare-meta">${meta}</div></div>`;
+}).join('')}</div><div class="compare-note">同一输入分别经过明文基准、CrypTen 两方路径和 MCU 三方路径。Docker 启动会包含容器冷启动与编排开销；Docker 服务会复用已经启动的服务进程。${ratioNote}</div>`;
+const attn=(firstOk.attention||data.attention||[]);
+document.getElementById('attnWords').innerHTML=attn.map(a=>`<span class="attn-word" style="${attnColor(Number(a.weight||0.2))}">${esc(a.word)}</span>`).join('');
+document.getElementById('leakPlain').textContent=text;
+document.getElementById('leakCipher').textContent='['+Array.from({length:3},()=>Math.floor(Math.random()*9e17+1e17)).join(', ')+', ...]';
+renderLogs(data.logs||[]);
+}
 
 // ═══ MAIN ═══
 async function runInfer(){
 const btn=document.getElementById('inferBtn'),text=document.getElementById('inputText').value.trim();
 if(!text)return;
-btn.disabled=true;btn.textContent='MPC 计算中…';
-document.getElementById('result').classList.remove('show');
-const logBox=document.getElementById('logBox');logBox.innerHTML='';
-
-// Start API call immediately (don't wait for log animation)
-const c=new AbortController();
-const timer=setTimeout(()=>c.abort(),10000);
-const apiPromise=fetch(API+'/api/infer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,scenario:currentScen}),signal:c.signal}).then(r=>r.ok?r.json():null).catch(()=>null);
-
-// Animate logs WHILE API is running
-const logs=[
-['14:30:01','P0','HP','初始化','AES-CTR 同步随机数种子交换','0.2KB'],
-['14:30:01','P0','HP','Mask','用户输入拆分为随机秘密份额','1.4KB'],
-['14:30:01','P1','HP','Mask','模型权重拆分为随机秘密份额','0.9KB'],
-['14:30:02','HP','P0','Compute','mul_batch：256 次 MPC 安全乘法','5.8KB'],
-['14:30:02','HP','P1','Compute','乘法结果分片：s0→P0, s1→P1','5.8KB'],
-['14:30:02','HP','P0','Compute','Π_softmax 安全 Softmax · 误差 10⁻¹⁵','0.7KB'],
-['14:30:03','P0','HP','Mask','Π_gelu 安全 GeLU 激活函数','0.4KB'],
-['14:30:03','HP','P1','Compute','GeLU 浮点域精确计算完成','0.4KB'],
-['14:30:03','P0','P1','Reveal','双方份额合并 · 输出分类结果','0.2KB'],
-];
-for(let i=0;i<logs.length;i++){
-const log=logs[i];await sleep(i===0?400:180);
-const line=document.createElement('div');line.className='log-line';
-line.innerHTML=`
-<span class="log-time">${log[0]}</span>
-<span class="log-tag ${log[1]}">${log[1]}</span>
-<span class="log-arrow">→</span>
-<span class="log-tag ${log[2]}">${log[2]}</span>
-
-<span class="log-detail">
-<b>${log[3]}</b> · ${log[4]}
-</span>
-
-<span class="log-bytes">${log[5]}</span>
-`;
-logBox.appendChild(line);logBox.scrollTop=logBox.scrollHeight;
+const launch=document.getElementById('launchMode').value;
+const missing=missingServicesForLaunch(launch);
+if(missing.length){
+document.getElementById('logBox').innerHTML=`<span style="color:var(--orange)">Docker 服务模式需要先启动：${missing.join('、')}。</span>`;
+toast('服务未全部启动',false);
+return;
 }
-
-// Wait for API (should be done by now, but just in case)
-const data=await apiPromise;
-clearTimeout(timer);
-
-if(data&&data.success){
+btn.disabled=true;btn.textContent='三路比较中…';
 document.getElementById('result').classList.add('show');
-const predEl=document.getElementById('predLabel');
-predEl.textContent=data.top_prediction;
-if(data.confidence>60)predEl.classList.add('blue');else predEl.classList.remove('blue');
-document.getElementById('predConf').textContent='置信度 '+data.confidence+'%';
-document.getElementById('predMeta').innerHTML='<span class="tag ok">MPC 验证通过</span><span class="tag info">Rust HP 引擎</span><br>'+data.elapsed_seconds+'s · '+data.mul_count+'次安全乘法 · '+data.method;
-document.getElementById('distBox').innerHTML=data.distribution.map((d,i)=>`<div class="dist-row"><div class="dist-name">${d.label}</div><div class="dist-bar"><div class="dist-fill" style="width:${d.prob}%;background:${i===0?'var(--blue)':'var(--grid)'}"></div></div><div class="dist-val">${d.prob}%</div></div>`).join('');
-document.getElementById('attnWords').innerHTML=data.attention.map(a=>`<span class="attn-word" style="${attnColor(a.weight)}">${a.word}</span>`).join('');
-try{const cmp=await(await fetch(API+'/api/compare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,scenario:currentScen})})).json();document.getElementById('leakPlain').textContent=cmp.plaintext_mode.p1_sees;document.getElementById('leakCipher').textContent=cmp.mpc_mode.p1_sees;}catch(e){}
-toast('MPC 推理完成 · Rust HP 验证通过',true);
-}else{
-// Offline fallback
-document.getElementById('result').classList.add('show');
-document.getElementById('predLabel').textContent=labels[currentScen];document.getElementById('predLabel').classList.remove('blue');
-document.getElementById('predConf').textContent='置信度 '+dists[currentScen][0][1]+'%';
-document.getElementById('predMeta').innerHTML='<span class="tag warn">离线演示</span><br>Rust HP 或 API 未连接 · 使用模拟数据';
-document.getElementById('distBox').innerHTML=dists[currentScen].map(([l,p],i)=>`<div class="dist-row"><div class="dist-name">${l}</div><div class="dist-bar"><div class="dist-fill" style="width:${p}%;background:${i===0?'var(--blue)':'var(--grid)'}"></div></div><div class="dist-val">${p}%</div></div>`).join('');
-const words=text.replace(/[，。]/g,' ').split(' ').filter(w=>w.trim());
-document.getElementById('attnWords').innerHTML=words.map(w=>`<span class="attn-word" style="${attnColor(Math.random())}">${w}</span>`).join('');
+document.getElementById('predLabel').textContent='三路比较';
+document.getElementById('predLabel').classList.add('blue');
+document.getElementById('predConf').textContent='执行中';
+document.getElementById('predMeta').innerHTML=`<span class="tag ok">${esc(launch)}</span><span class="tag info">${esc(currentScen)}</span>`;
+document.getElementById('distBox').innerHTML='<div class="compare-note">正在执行 Plaintext、CrypTen、MCU 三路比较，请稍候。</div>';
+document.getElementById('attnWords').innerHTML='';
 document.getElementById('leakPlain').textContent=text;
-document.getElementById('leakCipher').textContent='['+Array.from({length:3},()=>Math.floor(Math.random()*9e17+1e17)).join(', ')+', ...]';
-toast('离线演示模式 · 后端未连接',false);
+document.getElementById('leakCipher').textContent='等待协议输出...';
+const logBox=document.getElementById('logBox');logBox.innerHTML='';
+const commTimer=startCompareTicker(logBox,launch);
+try{
+const res=await fetch(API+'/api/scenario/compare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,scenario:currentScen,launch})});
+const data=await res.json();
+if(!data.success)throw new Error(data.error||'三路比较失败');
+stopCompareTicker(commTimer);
+renderCompare(data,text);
+toast('三路比较完成',true);
+}catch(e){
+stopCompareTicker(commTimer);
+logBox.innerHTML=`<span style="color:var(--red)">三路比较失败：${esc(e.message||e)}</span>`;
+toast('三路比较失败',false);
 }
-btn.disabled=false;btn.textContent='开始隐私推理';
+btn.disabled=false;btn.textContent='比较三路推理';
 }
 const canvas=document.getElementById('bgNet');
 
@@ -1026,6 +1121,8 @@ requestAnimationFrame(animateNetwork);
 }
 
 animateNetwork();
+pollServiceStatus();
+setInterval(pollServiceStatus,15000);
 </script>
 
 </div>

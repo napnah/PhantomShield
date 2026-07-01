@@ -85,6 +85,16 @@
   }
   button:hover { transform: translateY(-2px); box-shadow: 0 6px 24px rgba(52,224,138,0.4); }
   button:disabled { background: var(--border); color: var(--ink-dim); cursor: not-allowed; transform: none; box-shadow: none; }
+  .service-panel { display: none; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
+  .service-card { border: 1px solid var(--border); border-radius: 12px; padding: 14px; background: var(--panel-hi); }
+  .service-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .service-title { font-weight: 700; color: var(--ink); }
+  .service-state { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); }
+  .service-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .service-actions button { min-height: 34px; padding: 0 14px; border-radius: 8px; font-size: 13px; }
+  .service-actions .stop { background: linear-gradient(135deg, #ff8a4c, #d64d2a); color: #220a02; }
+  .service-note { margin-top: 10px; font-size: 12px; color: var(--ink-dim); line-height: 1.5; }
+  @media (max-width: 900px) { .service-panel { grid-template-columns: 1fr; } }
 
   .result { margin-top: 22px; display: none; }
   .result.show { display: block; animation: fadein 0.4s ease; }
@@ -187,7 +197,39 @@
           <option value="crypten">CrypTen 12L + 2Quad</option>
           <option value="mcu_rust" selected>MCU-Rust 12L</option>
         </select>
+        <span style="color:var(--ink-dim);font-size:14px;margin-left:12px;margin-right:8px">启动方式：</span>
+        <select id="bertLaunch" style="background:var(--bg);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:15px">
+          <option value="process">进程启动</option>
+          <option value="docker">Docker 启动</option>
+          <option value="docker_service">Docker 服务</option>
+        </select>
         <span id="methodTag" style="margin-left:12px;font-family:var(--mono);font-size:13px;color:var(--key)"></span>
+      </div>
+      <div class="service-panel" id="servicePanel">
+        <div class="service-card">
+          <div class="service-head">
+            <span class="service-title">CrypTen 服务</span>
+            <span class="service-state" id="cryptenServiceState">未查询</span>
+          </div>
+          <div class="service-actions">
+            <button onclick="serviceAction('crypten','start')">启动</button>
+            <button class="stop" onclick="serviceAction('crypten','stop')">停止</button>
+            <button onclick="serviceAction('crypten','status')">状态</button>
+          </div>
+          <div class="service-note">两方 rank 常驻，BERT 模型/tokenizer 预加载。</div>
+        </div>
+        <div class="service-card">
+          <div class="service-head">
+            <span class="service-title">MCU 服务</span>
+            <span class="service-state" id="mcuServiceState">未查询</span>
+          </div>
+          <div class="service-actions">
+            <button onclick="serviceAction('mcu','start')">启动</button>
+            <button class="stop" onclick="serviceAction('mcu','stop')">停止</button>
+            <button onclick="serviceAction('mcu','status')">状态</button>
+          </div>
+          <div class="service-note">p0/p1/hp wrapper 与输入 share exporter 常驻；目标是服务模式快于 CrypTen。</div>
+        </div>
       </div>
       <div class="result" id="result">
         <div class="pred-main">
@@ -309,6 +351,7 @@ function switchScen(scen) {
   document.getElementById('logBox').innerHTML = '<div class="log-line"><span class="log-detail" style="color:var(--ink-dim)">等待推理启动...</span></div>';
   document.getElementById('leakCipher').textContent = '[等待推理...]';
   document.getElementById('bertModeRow').style.display = (scen === 'sentiment') ? 'flex' : 'none';
+  document.getElementById('servicePanel').style.display = (scen === 'sentiment') ? 'grid' : 'none';
 }
 function renderLatency() {
   const max = Math.max(...PERF.latency.map(d => d.v));
@@ -323,28 +366,140 @@ function renderAcc() {
 }
 function attnColor(w) { const a = 0.12 + w * 0.65; return `background: rgba(52,224,138,${a}); color: ${w > 0.5 ? '#04140b' : 'var(--ink)'}`; }
 
+const SERVICE_ACTIONS = {
+  crypten: { start: 'start_crypten', stop: 'stop_crypten', status: 'crypten_status', stateId: 'cryptenServiceState' },
+  mcu: { start: 'start_mcu', stop: 'stop_mcu', status: 'mcu_status', stateId: 'mcuServiceState' }
+};
+const serviceState = { crypten: false, mcu: false };
+function serviceReady(kind, data) {
+  const ready = data && data.ready;
+  if (!ready) return !!(data && data.success && kind !== 'status');
+  if (kind === 'crypten') return !!(ready.rank0 && ready.rank1);
+  return !!(ready.hp && ready.p0 && ready.p1 && (ready.input_exporter !== false));
+}
+function setServiceState(kind, data, working) {
+  const node = document.getElementById(SERVICE_ACTIONS[kind].stateId);
+  if (!node) return;
+  if (working) { node.textContent = '处理中...'; node.style.color = 'var(--warn)'; return; }
+  const ok = serviceReady(kind, data);
+  serviceState[kind] = ok;
+  node.textContent = ok ? '运行中' : (data && data.success ? '已停止' : '不可用');
+  node.style.color = ok ? 'var(--key)' : 'var(--ink-dim)';
+}
+async function serviceAction(kind, op) {
+  const cfg = SERVICE_ACTIONS[kind];
+  setServiceState(kind, null, true);
+  try {
+    const res = await fetch(API + '/api/bert/docker-service', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ action: cfg[op] })
+    });
+    const data = await res.json();
+    setServiceState(kind, data, false);
+    if (op !== 'status') await serviceAction(kind, 'status');
+  } catch (e) {
+    setServiceState(kind, { success: false }, false);
+  }
+}
+async function pollServiceStatus() {
+  await Promise.allSettled([serviceAction('crypten', 'status'), serviceAction('mcu', 'status')]);
+}
+function requiredServiceFor(mode) {
+  if (mode === 'crypten') return 'crypten';
+  if (mode === 'mcu_rust') return 'mcu';
+  return null;
+}
+function showServiceWarning(kind) {
+  const logBox = document.getElementById('logBox');
+  const label = kind === 'crypten' ? 'CrypTen' : 'MCU';
+  logBox.innerHTML = `<div class="log-line"><span class="log-detail" style="color:var(--warn)">${label} 服务未运行，请先在服务面板中启动后再使用 Docker 服务推理。</span></div>`;
+}
+function appendCommLog(logBox, sender, receiver, detail, bytes = 0, type = 'Event') {
+  const line = document.createElement('div');
+  line.className = 'log-line';
+  const t = new Date().toTimeString().slice(0, 8);
+  line.innerHTML = `<span class="log-time">${t}</span><span class="tag ${sender}">${sender}</span><span class="log-arrow">→</span><span class="tag ${receiver}">${receiver}</span><span class="log-detail"><b>${type}</b> · ${detail}</span><span class="log-bytes">${bytes}B</span>`;
+  logBox.appendChild(line);
+  logBox.scrollTop = logBox.scrollHeight;
+}
+function currentCommEvents(mode, launch) {
+  if (launch === 'docker_service' && mode === 'crypten') return [
+    ['API', 'CrypTen', '提交请求到常驻 rank0/rank1 服务', 0, 'Service'],
+    ['R0', 'R1', 'Gloo/TCP 同步密文 BERT 输入张量', 2048, 'CrypTen'],
+    ['R0', 'R1', '执行 Attention/FFN 密文张量运算', 4096, 'CrypTen'],
+    ['R0', 'API', '返回预测概率与服务端计时', 1024, 'Result'],
+  ];
+  if (launch === 'docker_service' && mode === 'mcu_rust') return [
+    ['API', 'MCU', '提交请求到常驻 p0/p1/hp 服务', 0, 'Service'],
+    ['HOST', 'P0/P1', '输入文本导出为 secret shares', 2048, 'Share'],
+    ['P0', 'HP', '发送输入份额与掩码张量', 4096, 'MCU'],
+    ['P1', 'HP', '发送模型份额与修正信息', 4096, 'MCU'],
+    ['HP', 'P0/P1', '执行矩阵乘法修正与非线性辅助计算', 8192, 'MCU'],
+    ['P0/P1', 'API', '汇总输出份额并返回预测结果', 1024, 'Result'],
+  ];
+  if (mode === 'plaintext') return [
+    ['HOST', 'HOST', '本地明文 BERT 前向推理', 0, 'Plaintext'],
+    ['HOST', 'API', '返回明文基准预测结果', 0, 'Result'],
+  ];
+  return [
+    ['P0', 'HP', '发送掩码后的输入份额', 1024, 'MCU'],
+    ['P1', 'HP', '发送模型权重份额', 4096, 'MCU'],
+    ['HP', 'P0/P1', '执行安全算子并返回输出份额', 2048, 'MCU'],
+  ];
+}
+function startCommTicker(logBox, mode, launch) {
+  const events = currentCommEvents(mode, launch);
+  let idx = 0;
+  logBox.innerHTML = '';
+  appendCommLog(logBox, 'UI', 'API', '推理请求已发起，等待后端调度', 0, 'Request');
+  const timer = setInterval(() => {
+    const evt = events[idx % events.length];
+    appendCommLog(logBox, evt[0], evt[1], evt[2], evt[3], evt[4]);
+    idx++;
+  }, 1400);
+  return timer;
+}
+function stopCommTicker(timer) {
+  if (timer) clearInterval(timer);
+}
+
 async function runInfer() {
   const btn = document.getElementById('inferBtn');
   const text = document.getElementById('inputText').value.trim();
   if (!text) return;
   btn.disabled = true; btn.textContent = '推理中...';
   const logBox = document.getElementById('logBox'); logBox.innerHTML = '';
+  let commTimer = null;
   try {
     let res;
+    let mode = 'mcu_rust';
+    let launch = 'process';
     if (currentScen === 'sentiment') {
-      const mode = document.getElementById('bertMode').value;
-      res = await fetch(API + '/api/infer/semantic', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text, mode, max_seq_len: 32 }) });
+      mode = document.getElementById('bertMode').value;
+      launch = document.getElementById('bertLaunch').value;
+      const serviceKind = launch === 'docker_service' ? requiredServiceFor(mode) : null;
+      if (serviceKind && !serviceState[serviceKind]) {
+        showServiceWarning(serviceKind);
+        btn.disabled = false; btn.textContent = '加密推理';
+        return;
+      }
+      commTimer = startCommTicker(logBox, mode, launch);
+      res = await fetch(API + '/api/bert/infer', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text, mode, launch, max_seq_len: 16 }) });
     } else {
+      commTimer = startCommTicker(logBox, mode, launch);
       res = await fetch(API + '/api/infer', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text, scenario: currentScen }) });
     }
     const data = await res.json();
+    stopCommTicker(commTimer); commTimer = null;
     const logData = await (await fetch(API + '/api/logs')).json();
     const cmpData = await (await fetch(API + '/api/compare', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ text, scenario: currentScen }) })).json();
-    for (const log of logData.logs) {
+    logBox.innerHTML = '';
+    const finalLogs = (data.logs && data.logs.length) ? data.logs : (logData.logs || []);
+    if (!finalLogs.length) appendCommLog(logBox, 'API', 'UI', '推理完成，未返回详细通信日志', 0, 'Result');
+    for (const log of finalLogs) {
       await sleep(200);
-      const line = document.createElement('div'); line.className = 'log-line';
-      line.innerHTML = `<span class="log-time">${log.timestamp}</span><span class="tag ${log.sender}">${log.sender}</span><span class="log-arrow">→</span><span class="tag ${log.receiver}">${log.receiver}</span><span class="log-detail">${log.detail}</span><span class="log-bytes">${log.bytes}B</span>`;
-      logBox.appendChild(line); logBox.scrollTop = logBox.scrollHeight;
+      appendCommLog(logBox, log.sender, log.receiver, log.detail, log.bytes, log.type || 'Docker');
     }
     document.getElementById('result').classList.add('show');
     document.getElementById('predLabel').textContent = data.top_prediction || data.label;
@@ -356,7 +511,10 @@ async function runInfer() {
     document.getElementById('attnWords').innerHTML = data.attention.map(a => `<span class="attn-word" style="${attnColor(a.weight)}">${a.word}</span>`).join('');
     document.getElementById('leakPlain').textContent = cmpData.plaintext_mode.p1_sees;
     document.getElementById('leakCipher').textContent = cmpData.mpc_mode.p1_sees;
-  } catch (e) { await simulateOffline(logBox, text); }
+  } catch (e) {
+    stopCommTicker(commTimer);
+    await simulateOffline(logBox, text);
+  }
   btn.disabled = false; btn.textContent = '加密推理';
 }
 async function simulateOffline(logBox, text) {
@@ -398,7 +556,7 @@ function matrixRain() {
   }, 70);
   addEventListener('resize', () => { c.width = innerWidth; c.height = innerHeight; });
 }
-matrixRain(); loadPerf();
+matrixRain(); loadPerf(); pollServiceStatus(); setInterval(pollServiceStatus, 15000);
 </script>
 </body>
 </html>

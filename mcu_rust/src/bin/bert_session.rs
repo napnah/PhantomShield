@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::env;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use mcu_rust::channel::{
     reset_socket_stats, socket_stats_snapshot, HpComm, PartyComm, SocketHpEndpoint,
@@ -20,6 +22,7 @@ const SHARED_SEED: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
 const HP_P0_SEED: [u8; 16] = [
     16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
 ];
+static MODEL_SHARE_CACHE: OnceLock<Mutex<HashMap<PathBuf, Vec<u64>>>> = OnceLock::new();
 
 #[derive(Clone, Copy)]
 struct BertShape {
@@ -78,7 +81,7 @@ impl StateMode {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: bert_session hp|p0|p1 --addr HOST:PORT --batch 1 --seq 16 --hidden 768 --heads 12 --ffn 3072 --layers 12 [--state-mode synthetic|chained] [--input-mode synthetic|real_io] [--share-dir DIR] [--out p0.out]"
+        "usage: bert_session hp|p0|p1|service-hp|service-p0|service-p1 --addr HOST:PORT --batch 1 --seq 16 --hidden 768 --heads 12 --ffn 3072 --layers 12 [--state-mode synthetic|chained] [--input-mode synthetic|real_io] [--share-dir DIR] [--model-share-dir DIR] [--out p0.out] [--service-dir DIR]"
     );
     std::process::exit(2);
 }
@@ -90,6 +93,12 @@ fn arg_value(args: &[String], name: &str, default: Option<&str>) -> String {
         }
     }
     default.map(str::to_string).unwrap_or_else(|| usage())
+}
+
+fn write_text_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, text)?;
+    fs::rename(tmp, path)
 }
 
 fn parse_shape(args: &[String]) -> BertShape {
@@ -228,12 +237,18 @@ fn read_u64_file(path: &Path, expected_len: usize) -> std::io::Result<Vec<u64>> 
     let mut file = File::open(path)?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
-    assert_eq!(
-        bytes.len(),
-        expected_len * 8,
-        "share file byte length mismatch: {}",
-        path.display()
-    );
+    let expected_bytes = expected_len * 8;
+    if bytes.len() != expected_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "share file byte length mismatch: {} got={} expected={}",
+                path.display(),
+                bytes.len(),
+                expected_bytes
+            ),
+        ));
+    }
     let mut out = Vec::with_capacity(expected_len);
     for chunk in bytes.chunks_exact(8) {
         let mut buf = [0u8; 8];
@@ -245,6 +260,44 @@ fn read_u64_file(path: &Path, expected_len: usize) -> std::io::Result<Vec<u64>> 
 
 fn read_share_file(dir: &Path, name: &str, expected_len: usize) -> std::io::Result<Vec<u64>> {
     read_u64_file(&dir.join(name), expected_len)
+}
+
+fn read_share_file_with_fallback(
+    dir: &Path,
+    fallback_dir: Option<&Path>,
+    name: &str,
+    expected_len: usize,
+) -> std::io::Result<Vec<u64>> {
+    let primary = dir.join(name);
+    if primary.exists() {
+        return read_u64_file(&primary, expected_len);
+    }
+    if let Some(fallback) = fallback_dir {
+        let fallback_path = fallback.join(name);
+        if fallback_path.exists() {
+            return read_cached_model_share(&fallback_path, expected_len);
+        }
+    }
+    read_u64_file(&primary, expected_len)
+}
+
+fn read_cached_model_share(path: &Path, expected_len: usize) -> std::io::Result<Vec<u64>> {
+    let cache = MODEL_SHARE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache
+        .lock()
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "model share cache poisoned"))?;
+    if let Some(values) = guard.get(path) {
+        assert_eq!(
+            values.len(),
+            expected_len,
+            "cached model share length mismatch: {}",
+            path.display()
+        );
+        return Ok(values.clone());
+    }
+    let values = read_u64_file(path, expected_len)?;
+    guard.insert(path.to_path_buf(), values.clone());
+    Ok(values)
 }
 
 fn read_optional_share_file(
@@ -281,6 +334,32 @@ fn add_bias_share(matrix: &mut [u64], bias: &[u64], rows: usize, cols: usize) {
             *value = add(*value, bias_value);
         }
     }
+}
+
+fn concat_weight_columns(weights: [&[u64]; 3], rows: usize, cols: usize) -> Vec<u64> {
+    for weight in weights {
+        assert_eq!(weight.len(), rows * cols, "qkv weight shape mismatch");
+    }
+    let mut out = Vec::with_capacity(rows * cols * 3);
+    for row_idx in 0..rows {
+        for weight in weights {
+            out.extend_from_slice(&weight[row_idx * cols..(row_idx + 1) * cols]);
+        }
+    }
+    out
+}
+
+fn split_qkv_projection(values: Vec<u64>, rows: usize, cols: usize) -> (Vec<u64>, Vec<u64>, Vec<u64>) {
+    assert_eq!(values.len(), rows * cols * 3, "qkv projection shape mismatch");
+    let mut q = Vec::with_capacity(rows * cols);
+    let mut k = Vec::with_capacity(rows * cols);
+    let mut v = Vec::with_capacity(rows * cols);
+    for row in values.chunks_exact(cols * 3) {
+        q.extend_from_slice(&row[..cols]);
+        k.extend_from_slice(&row[cols..cols * 2]);
+        v.extend_from_slice(&row[cols * 2..cols * 3]);
+    }
+    (q, k, v)
 }
 
 fn trunc_share(id: u8, share: u64, bits: u32) -> u64 {
@@ -947,6 +1026,27 @@ fn run_hp_matmul(
     );
 }
 
+fn connect_party_with_retry(addr: &str, id: u8) -> std::io::Result<SocketPartyEndpoint> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match SocketPartyEndpoint::connect(addr, id) {
+            Ok(comm) => return Ok(comm),
+            Err(err) if Instant::now() < deadline => {
+                if !matches!(
+                    err.kind(),
+                    std::io::ErrorKind::ConnectionRefused
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::NotConnected
+                ) {
+                    return Err(err);
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
 fn run_party_session(args: &[String], id: u8) -> std::io::Result<()> {
     let shape = parse_shape(args);
     let state_mode = parse_state_mode(args);
@@ -961,11 +1061,18 @@ fn run_party_session(args: &[String], id: u8) -> std::io::Result<()> {
         Some(if id == 0 { "p0.bert" } else { "p1.bert" }),
     );
     let share_dir = PathBuf::from(arg_value(args, "--share-dir", Some(".")));
+    let model_share_dir_arg = arg_value(args, "--model-share-dir", Some(""));
+    let model_share_dir = if model_share_dir_arg.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(model_share_dir_arg))
+    };
+    let model_share_dir_ref = model_share_dir.as_deref();
     if input_mode == InputMode::RealIo && state_mode != StateMode::Chained {
         eprintln!("real_io requires --state-mode chained");
         usage();
     }
-    let comm = SocketPartyEndpoint::connect(&addr, id)?;
+    let comm = connect_party_with_retry(&addr, id)?;
     let mut prg = PrgSync::new(&SHARED_SEED);
     reset_socket_stats();
     reset_tensor_stats();
@@ -1004,149 +1111,129 @@ fn run_party_session(args: &[String], id: u8) -> std::io::Result<()> {
 
     for layer in 0..shape.layers {
         if input_mode == InputMode::RealIo {
-            let wq = read_share_file(
+            let wq = read_share_file_with_fallback(
                 &share_dir,
+                model_share_dir_ref,
                 &format!("layer_{layer:02}_Wq.bin"),
                 shape.hidden * shape.hidden,
             )?;
-            let bq = read_share_file(
+            let bq = read_share_file_with_fallback(
                 &share_dir,
+                model_share_dir_ref,
                 &format!("layer_{layer:02}_b_q.bin"),
                 shape.hidden,
             )?;
-            let wk = read_share_file(
+            let wk = read_share_file_with_fallback(
                 &share_dir,
+                model_share_dir_ref,
                 &format!("layer_{layer:02}_Wk.bin"),
                 shape.hidden * shape.hidden,
             )?;
-            let bk = read_share_file(
+            let bk = read_share_file_with_fallback(
                 &share_dir,
+                model_share_dir_ref,
                 &format!("layer_{layer:02}_b_k.bin"),
                 shape.hidden,
             )?;
-            let wv = read_share_file(
+            let wv = read_share_file_with_fallback(
                 &share_dir,
+                model_share_dir_ref,
                 &format!("layer_{layer:02}_Wv.bin"),
                 shape.hidden * shape.hidden,
             )?;
-            let bv = read_share_file(
+            let bv = read_share_file_with_fallback(
                 &share_dir,
+                model_share_dir_ref,
                 &format!("layer_{layer:02}_b_v.bin"),
                 shape.hidden,
             )?;
-            let wo = read_share_file(
+            let wo = read_share_file_with_fallback(
                 &share_dir,
+                model_share_dir_ref,
                 &format!("layer_{layer:02}_Wo.bin"),
                 shape.hidden * shape.hidden,
             )?;
-            let bo = read_share_file(
+            let bo = read_share_file_with_fallback(
                 &share_dir,
+                model_share_dir_ref,
                 &format!("layer_{layer:02}_b_o.bin"),
                 shape.hidden,
             )?;
-            let w1 = read_share_file(
+            let w1 = read_share_file_with_fallback(
                 &share_dir,
+                model_share_dir_ref,
                 &format!("layer_{layer:02}_W1.bin"),
                 shape.hidden * shape.ffn,
             )?;
-            let b1 = read_share_file(&share_dir, &format!("layer_{layer:02}_b1.bin"), shape.ffn)?;
-            let w2 = read_share_file(
+            let b1 = read_share_file_with_fallback(
                 &share_dir,
+                model_share_dir_ref,
+                &format!("layer_{layer:02}_b1.bin"),
+                shape.ffn,
+            )?;
+            let w2 = read_share_file_with_fallback(
+                &share_dir,
+                model_share_dir_ref,
                 &format!("layer_{layer:02}_W2.bin"),
                 shape.ffn * shape.hidden,
             )?;
-            let b2 = read_share_file(
+            let b2 = read_share_file_with_fallback(
                 &share_dir,
+                model_share_dir_ref,
                 &format!("layer_{layer:02}_b2.bin"),
                 shape.hidden,
             )?;
-            let ln1_g = read_share_file(
+            let ln1_g = read_share_file_with_fallback(
                 &share_dir,
+                model_share_dir_ref,
                 &format!("layer_{layer:02}_ln1_g.bin"),
                 shape.hidden,
             )?;
-            let ln1_b = read_share_file(
+            let ln1_b = read_share_file_with_fallback(
                 &share_dir,
+                model_share_dir_ref,
                 &format!("layer_{layer:02}_ln1_b.bin"),
                 shape.hidden,
             )?;
-            let ln2_g = read_share_file(
+            let ln2_g = read_share_file_with_fallback(
                 &share_dir,
+                model_share_dir_ref,
                 &format!("layer_{layer:02}_ln2_g.bin"),
                 shape.hidden,
             )?;
-            let ln2_b = read_share_file(
+            let ln2_b = read_share_file_with_fallback(
                 &share_dir,
+                model_share_dir_ref,
                 &format!("layer_{layer:02}_ln2_b.bin"),
                 shape.hidden,
             )?;
 
             let role = format!("p{id}");
-            let mut q = party_rescale_vec(
+            let qkv_weight = concat_weight_columns([&wq, &wk, &wv], shape.hidden, shape.hidden);
+            let qkv = party_rescale_vec(
                 id,
                 &comm,
                 &role,
                 layer,
-                "q_proj",
+                "qkv_proj",
                 run_party_matmul_with_weight(
                     id,
                     &mut prg,
                     &comm,
                     layer,
-                    "q_proj",
+                    "qkv_proj",
                     &hidden,
-                    &wq,
+                    &qkv_weight,
                     tokens,
                     shape.hidden,
-                    shape.hidden,
+                    shape.hidden * 3,
                 ),
                 rescale_bits,
                 rescale_mode,
             );
+            let (mut q, mut k, mut v) = split_qkv_projection(qkv, tokens, shape.hidden);
             add_bias_share(&mut q, &bq, tokens, shape.hidden);
-            let mut k = party_rescale_vec(
-                id,
-                &comm,
-                &role,
-                layer,
-                "k_proj",
-                run_party_matmul_with_weight(
-                    id,
-                    &mut prg,
-                    &comm,
-                    layer,
-                    "k_proj",
-                    &hidden,
-                    &wk,
-                    tokens,
-                    shape.hidden,
-                    shape.hidden,
-                ),
-                rescale_bits,
-                rescale_mode,
-            );
             add_bias_share(&mut k, &bk, tokens, shape.hidden);
-            let mut v = party_rescale_vec(
-                id,
-                &comm,
-                &role,
-                layer,
-                "v_proj",
-                run_party_matmul_with_weight(
-                    id,
-                    &mut prg,
-                    &comm,
-                    layer,
-                    "v_proj",
-                    &hidden,
-                    &wv,
-                    tokens,
-                    shape.hidden,
-                    shape.hidden,
-                ),
-                rescale_bits,
-                rescale_mode,
-            );
             add_bias_share(&mut v, &bv, tokens, shape.hidden);
 
             let mut score_shares = Vec::with_capacity(shape.batch * shape.heads);
@@ -1548,10 +1635,22 @@ fn run_party_session(args: &[String], id: u8) -> std::io::Result<()> {
     let mut final_prediction: Option<usize> = None;
     if input_mode == InputMode::RealIo {
         let role = format!("p{id}");
-        let pooler_w = read_share_file(&share_dir, "pooler_W.bin", shape.hidden * shape.hidden)?;
-        let pooler_b = read_share_file(&share_dir, "pooler_b.bin", shape.hidden)?;
-        let classifier_w = read_share_file(&share_dir, "classifier_W.bin", shape.hidden * 2)?;
-        let classifier_b = read_share_file(&share_dir, "classifier_b.bin", 2)?;
+        let pooler_w = read_share_file_with_fallback(
+            &share_dir,
+            model_share_dir_ref,
+            "pooler_W.bin",
+            shape.hidden * shape.hidden,
+        )?;
+        let pooler_b =
+            read_share_file_with_fallback(&share_dir, model_share_dir_ref, "pooler_b.bin", shape.hidden)?;
+        let classifier_w = read_share_file_with_fallback(
+            &share_dir,
+            model_share_dir_ref,
+            "classifier_W.bin",
+            shape.hidden * 2,
+        )?;
+        let classifier_b =
+            read_share_file_with_fallback(&share_dir, model_share_dir_ref, "classifier_b.bin", 2)?;
         let cls = cls_rows(&hidden, shape);
         let mut pooler_linear = party_rescale_vec(
             id,
@@ -1559,10 +1658,10 @@ fn run_party_session(args: &[String], id: u8) -> std::io::Result<()> {
             &role,
             shape.layers,
             "pooler_dense",
-            run_party_matmul_with_weight(
-                id,
-                &mut prg,
-                &comm,
+                run_party_matmul_with_weight(
+                    id,
+                    &mut prg,
+                    &comm,
                 shape.layers,
                 "pooler_dense",
                 &cls,
@@ -1586,10 +1685,10 @@ fn run_party_session(args: &[String], id: u8) -> std::io::Result<()> {
             &role,
             shape.layers,
             "classifier",
-            run_party_matmul_with_weight(
-                id,
-                &mut prg,
-                &comm,
+                run_party_matmul_with_weight(
+                    id,
+                    &mut prg,
+                    &comm,
                 shape.layers,
                 "classifier",
                 &pooler_ring,
@@ -1704,26 +1803,24 @@ fn run_hp_session(args: &[String]) -> std::io::Result<()> {
 
     for layer in 0..shape.layers {
         if input_mode == InputMode::RealIo {
-            for module in ["q_proj", "k_proj", "v_proj"] {
-                run_hp_matmul(
-                    &mut prg,
-                    &comm,
-                    layer,
-                    module,
-                    tokens,
-                    shape.hidden,
-                    shape.hidden,
-                );
-                hp_rescale_vec(
-                    &mut prg,
-                    &comm,
-                    layer,
-                    module,
-                    tokens * shape.hidden,
-                    rescale_bits,
-                    rescale_mode,
-                );
-            }
+            run_hp_matmul(
+                &mut prg,
+                &comm,
+                layer,
+                "qkv_proj",
+                tokens,
+                shape.hidden,
+                shape.hidden * 3,
+            );
+            hp_rescale_vec(
+                &mut prg,
+                &comm,
+                layer,
+                "qkv_proj",
+                tokens * shape.hidden * 3,
+                rescale_bits,
+                rescale_mode,
+            );
             for _ in 0..shape.batch * shape.heads {
                 run_hp_matmul(
                     &mut prg,
@@ -2140,6 +2237,124 @@ fn print_timing(role: &str, total_s: f64) {
     );
 }
 
+fn next_request(service_dir: &Path, seen: &[String]) -> std::io::Result<Option<String>> {
+    let req_dir = service_dir.join("requests");
+    fs::create_dir_all(&req_dir)?;
+    let mut ids = Vec::new();
+    for entry in fs::read_dir(req_dir)? {
+        let path = entry?.path();
+        if path.extension().and_then(|value| value.to_str()) == Some("req") {
+            if let Some(stem) = path.file_stem().and_then(|value| value.to_str()) {
+                if !seen.iter().any(|item| item == stem) {
+                    ids.push(stem.to_string());
+                }
+            }
+        }
+    }
+    ids.sort();
+    Ok(ids.into_iter().next())
+}
+
+fn without_options(args: &[String], names: &[&str]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut idx = 0;
+    while idx < args.len() {
+        if names.iter().any(|name| args[idx] == *name) {
+            idx += 2;
+        } else {
+            out.push(args[idx].clone());
+            idx += 1;
+        }
+    }
+    out
+}
+
+fn service_args(args: &[String], request_id: &str, role: &str) -> Vec<String> {
+    let mut out = without_options(
+        args,
+        &["--share-dir", "--model-share-dir", "--out", "--service-dir", "--out-dir"],
+    );
+    let service_dir = PathBuf::from(arg_value(args, "--service-dir", Some("/workspace/out/mcu_service")));
+    let base_share_dir = PathBuf::from(arg_value(args, "--share-dir", Some("/workspace/bert_shares")));
+    let base_model_share_dir = PathBuf::from(arg_value(args, "--model-share-dir", Some("")));
+    let base_out_dir = PathBuf::from(arg_value(args, "--out-dir", Some("/workspace/out/mcu_service/responses")));
+    out.push("--share-dir".to_string());
+    out.push(
+        base_share_dir
+            .join(request_id)
+            .join(role)
+            .to_string_lossy()
+            .to_string(),
+    );
+    if !base_model_share_dir.as_os_str().is_empty() {
+        out.push("--model-share-dir".to_string());
+        out.push(base_model_share_dir.join(role).to_string_lossy().to_string());
+    }
+    out.push("--out".to_string());
+    out.push(
+        base_out_dir
+            .join(request_id)
+            .join(format!("{role}.out"))
+            .to_string_lossy()
+            .to_string(),
+    );
+    out.push("--service-dir".to_string());
+    out.push(service_dir.to_string_lossy().to_string());
+    out
+}
+
+fn run_service_loop(args: &[String], role: &str) -> std::io::Result<()> {
+    let service_dir = PathBuf::from(arg_value(args, "--service-dir", Some("/workspace/out/mcu_service")));
+    let ready_path = service_dir.join(format!("{role}.ready"));
+    let heartbeat_path = service_dir.join(format!("{role}.heartbeat"));
+    let stop_path = service_dir.join("stop");
+    let response_dir = service_dir.join("responses");
+    fs::create_dir_all(service_dir.join("requests"))?;
+    fs::create_dir_all(&response_dir)?;
+    write_text_atomic(&ready_path, "ready\n")?;
+    println!("[{role}] mcu_service_ready dir={}", service_dir.display());
+    let mut seen = Vec::new();
+    while !stop_path.exists() {
+        write_text_atomic(&heartbeat_path, &format!("{:.6}\n", Instant::now().elapsed().as_secs_f64()))?;
+        if let Some(request_id) = next_request(&service_dir, &seen)? {
+            seen.push(request_id.clone());
+            let req_start = Instant::now();
+            let run_args = service_args(args, &request_id, role);
+            let result = match role {
+                "hp" => run_hp_session(&run_args),
+                "p0" => run_party_session(&run_args, 0),
+                "p1" => run_party_session(&run_args, 1),
+                _ => unreachable!(),
+            };
+            let done_dir = response_dir.join(&request_id);
+            fs::create_dir_all(&done_dir)?;
+            match result {
+                Ok(()) => {
+                    write_text_atomic(
+                        &done_dir.join(format!("{role}.done")),
+                        &format!("elapsed_s={:.9}\n", req_start.elapsed().as_secs_f64()),
+                    )?;
+                    println!(
+                        "[{role}] mcu_service_request_done id={} elapsed_s={:.9}",
+                        request_id,
+                        req_start.elapsed().as_secs_f64()
+                    );
+                }
+                Err(err) => {
+                    write_text_atomic(&done_dir.join(format!("{role}.error")), &format!("{err}\n"))?;
+                    return Err(err);
+                }
+            }
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+    let _ = fs::remove_file(ready_path);
+    let _ = fs::remove_file(heartbeat_path);
+    println!("[{role}] mcu_service_stopped");
+    Ok(())
+}
+
 fn main() -> std::io::Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
@@ -2149,6 +2364,9 @@ fn main() -> std::io::Result<()> {
         "hp" => run_hp_session(&args[2..]),
         "p0" => run_party_session(&args[2..], 0),
         "p1" => run_party_session(&args[2..], 1),
+        "service-hp" => run_service_loop(&args[2..], "hp"),
+        "service-p0" => run_service_loop(&args[2..], "p0"),
+        "service-p1" => run_service_loop(&args[2..], "p1"),
         _ => usage(),
     }
 }

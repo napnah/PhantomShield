@@ -1,0 +1,10 @@
+---
+description: README language rule for AegisX
+alwaysApply: true
+---
+
+# README Language Rule
+
+- Write and maintain the top-level `README.md` in Chinese.
+- Command names, paths, environment variables, code identifiers, table headers, and unavoidable proper nouns may remain in English.
+- When updating `README.md`, prefer concise Chinese explanations and avoid mixing large English prose sections into the document.
